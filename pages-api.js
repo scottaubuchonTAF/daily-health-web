@@ -8,7 +8,7 @@
 })(typeof window === 'object' ? window : this, function (config, env) {
   'use strict';
   const scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/userinfo.email'];
-  const methods = new Set(['getBootstrap', 'saveDay', 'saveSettings', 'exportData', 'importData', 'deleteDay', 'recordForecast']);
+  const methods = new Set(['getBootstrap', 'saveDay', 'saveSettings', 'exportData', 'importData', 'deleteDay', 'recordForecast', 'getHealthSyncStatus', 'createHealthSyncKey', 'saveHealthSyncPreferences', 'revokeHealthSyncKey']);
   let token = '', expires = 0, connecting = null;
   const now = env.now || Date.now;
   const ready = () => /^\d+-[a-zA-Z0-9_-]+\.apps\.googleusercontent\.com$/.test(config.clientId || '') &&

@@ -35,7 +35,7 @@
     return total / 60000;
   }
   function parseSleep(text, timezone, today, now=Date.now()) {
-    assert(typeof text==='string' && text.length<=2_000_000, 'Choose at most 2 MB of sleep data.');
+    assert(typeof text==='string' && text.length<=2000000, 'Choose at most 2 MB of sleep data.');
     const lines=text.replace(/^\uFEFF/,'').trim().split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
     assert(lines.shift()===HEADER, 'Paste the result from your Daily Health Sleep Shortcut.');
     assert(lines.length<=18000, 'Import a shorter sleep date range.');
@@ -84,7 +84,7 @@
   }
   const sleepPlan=(imported,existing)=>samplePlan(imported,existing,'sleepMinutes');
   function parseSteps(text,timezone,today,now=Date.now()) {
-    assert(typeof text==='string'&&text.length<=2_000_000,'Choose at most 2 MB of step data.');
+    assert(typeof text==='string'&&text.length<=2000000,'Choose at most 2 MB of step data.');
     const lines=text.replace(/^\uFEFF/,'').trim().split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
     assert(lines.shift()==='DAILY_HEALTH_STEPS_V1','Paste the result from your Daily Health Steps Shortcut.');
     assert(lines.length<=18000,'Import a shorter step date range.');

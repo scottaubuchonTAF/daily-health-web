@@ -40,6 +40,8 @@
   const preview = document.body.dataset.mode === 'preview';
   const pages = document.body.dataset.mode === 'pages';
   const previewKey = 'daily-health-preview-v1';
+  let connectionGeneration=0;
+  let previewHealthConnection={revision:0,paired:false,sleep:false,steps:false,endpoint:'https://example.invalid/daily-health-sync',results:{}};
   let toastTimer;
   const uid = () => (crypto.randomUUID ? crypto.randomUUID() : 'save-' + Date.now() + '-' + Math.random().toString(36).slice(2));
   const readPreview = () => { try {
@@ -50,6 +52,14 @@
   function storePreview(data) { localStorage.setItem(previewKey, JSON.stringify(data)); }
   async function previewApi(method, request) {
     const data = readPreview(), today = C.today(data.settings.timezone);
+    if (method === 'getHealthSyncStatus') return C.clone(previewHealthConnection);
+    if (['createHealthSyncKey','saveHealthSyncPreferences','revokeHealthSyncKey'].includes(method)) {
+      if(request.baseRevision!==previewHealthConnection.revision)throw new Error('Sync settings changed. Refresh and try again.');
+      previewHealthConnection.revision++;
+      if(method==='revokeHealthSyncKey')Object.assign(previewHealthConnection,{paired:false,sleep:false,steps:false});
+      else Object.assign(previewHealthConnection,{sleep:request.sleep,steps:request.steps,...(method==='createHealthSyncKey'?{paired:true}:{})});
+      return {...C.clone(previewHealthConnection),...(method==='createHealthSyncKey'?{key:'preview-only-key-not-valid-for-a-real-sheet'}:{})};
+    }
     if (method === 'getBootstrap') return { ...data, today, mode: 'preview', spreadsheetUrl: '' };
     if (method === 'saveDay') {
       const index = data.days.findIndex(d => d.date === request.date), old = index < 0 ? C.blankDay(request.date) : data.days[index];
@@ -166,13 +176,73 @@
   const healthPreferencesKey = 'daily-health-sync-directions-v1';
   let healthPreferences = { sleep:true, steps:true, weight:true };
   try { const saved=JSON.parse(localStorage.getItem(healthPreferencesKey)||'null'); if(saved) for(const key of ['sleep','steps','weight']) if(typeof saved[key]==='boolean')healthPreferences[key]=saved[key]; } catch {}
-  let healthBusy=false, healthReview=null;
+  let healthBusy=false, healthReview=null, healthConnection=null, healthConnectionError='', healthStatusBusy=false;
+  async function refreshHealthConnection() {
+    if(healthStatusBusy||healthBusy||state.busy||state.queue.length)return;
+    healthStatusBusy=true;healthConnectionError='';if(state.tab==='health')render();
+    const generation=connectionGeneration;
+    try {
+      const [connection,latest]=await Promise.all([api('getHealthSyncStatus'),api('getBootstrap')]);
+      if(generation!==connectionGeneration)return;
+      healthConnection=connection;state.days=latest.days;state.settings=latest.settings;state.today=latest.today;
+      if(healthConnection.paired) {healthPreferences.sleep=healthConnection.sleep;healthPreferences.steps=healthConnection.steps;}
+    } catch(error) {healthConnectionError=error.message;}
+    finally {healthStatusBusy=false;if(state.tab==='health')render();}
+  }
+  function healthConnectionCard() {
+    const connection=healthConnection,paired=connection?.paired;
+    const status=paired?'Ready for your iPhone automation':'Connect your iPhone once';
+    return `<section class="card settings-card"><h2>Automatic imports</h2><p class="settings-intro">Your iPhone can send sleep and Watch steps when you open Messages. After the one-time setup, there is no paste or daily sync button.</p><p><strong>${status}</strong></p>${['sleep','steps'].map(kind=>{
+      const result=connection?.results?.[kind];
+      return `<div class="settings-row"><span>${kind==='sleep'?'Sleep':'Watch steps'}</span><span>${result?`${result.ok?'Received':'Needs attention'} · ${escape(new Date(result.at).toLocaleString([],{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}))}`:'Not received yet'}</span></div>${result&&!result.ok?`<p class="tiny danger">${escape(result.message)}</p>`:''}${result?.protected?'<p class="tiny">Manually entered values were kept.</p>':''}`;
+    }).join('')}<p class="tiny">A connection key alone does not install the automation. First complete the iPhone steps and check for a received time here. Apple Health may be unavailable while the phone is locked.</p><p class="tiny danger" role="status">${escape(healthConnectionError)}</p><div class="health-actions"><button class="primary health-action" id="health-pair" ${!connection?.endpoint||healthStatusBusy?'disabled':''}>${paired?'Replace connection key':'Connect iPhone'}</button><button class="secondary health-action" id="health-sync-refresh" ${healthStatusBusy?'disabled':''}>${healthStatusBusy?'Checking…':'Refresh status'}</button></div>${paired?'<button class="text-button danger" id="health-revoke">Disconnect automatic imports</button>':''}${preview?'<p class="tiny">Preview only: these connection details cannot access a real Sheet.</p>':!connection?.endpoint&&!healthStatusBusy&&!healthConnectionError?'<p class="tiny">The automatic connection is being prepared.</p>':''}<a class="health-guide-link" href="https://health.theaubuchonfamily.com/apple-health-setup.html#automatic" target="_blank" rel="noopener">One-time iPhone setup ${icon('chevron')}</a></section>`;
+  }
+  async function pairHealthPhone() {
+    if(healthBusy||!healthConnection?.endpoint)return;
+    openDialog(dialogHead(healthConnection.paired?'Replace iPhone connection?':'Connect your iPhone')+`<p>This key lets your iPhone send sleep and Watch steps to your private log. It cannot read your log or change your weight or food entries. ${healthConnection.paired?'Replacing it stops the old key immediately; update both Shortcuts with the new key.':''}</p><p class="tiny">Keep the key private. You can disconnect it from this page at any time.</p><p id="health-pair-error" class="tiny danger" role="alert"></p><button class="primary" id="health-create-key">Create connection key</button>`);
+    $('health-create-key').onclick=async()=>{
+      healthBusy=true;$('health-create-key').disabled=true;$('close-dialog').disabled=true;
+      try {
+        const result=await api('createHealthSyncKey',{baseRevision:healthConnection.revision,sleep:healthPreferences.sleep,steps:healthPreferences.steps});
+        const {key,...connection}=result;healthConnection=connection;
+        openDialog(dialogHead('Add this to your iPhone')+`<p>Copy these into the last steps of your Daily Health Shortcuts. The key is shown only here and is cleared when you close this window.</p><label for="health-sync-url">Connection address</label><input id="health-sync-url" type="text" readonly autocomplete="off" value="${escape(connection.endpoint)}"><button class="secondary" id="health-copy-url">Copy address</button><label for="health-sync-key">Private connection key</label><input id="health-sync-key" type="password" readonly autocomplete="off" value="${escape(key)}"><button class="secondary" id="health-copy-key">Copy key</button><p class="tiny" id="health-copy-status" role="status"></p><a class="health-guide-link" href="https://health.theaubuchonfamily.com/apple-health-setup.html#automatic" target="_blank" rel="noopener">Finish iPhone setup ${icon('chevron')}</a><p class="tiny">In the request use <strong>kind: sleep</strong> for Sleep or <strong>kind: steps</strong> for Steps. Leave the key out of the address.</p>`);
+        for(const [button,id] of [['health-copy-url','health-sync-url'],['health-copy-key','health-sync-key']]) $(button).onclick=async()=>{
+          try {await navigator.clipboard.writeText($(id).value);$('health-copy-status').textContent='Copied. Paste it into your Shortcut.';}
+          catch {$(id).type='text';$(id).focus();$(id).select();$('health-copy-status').textContent='Touch and hold the selected value, then choose Copy.';}
+        };
+        render();
+      }catch(error){$('health-pair-error').textContent=error.message;$('health-create-key').disabled=false;}
+      finally{healthBusy=false;$('close-dialog').disabled=false;render();}
+    };
+  }
+  function disconnectHealthPhone() {
+    if(healthBusy||!healthConnection?.paired)return;
+    openDialog(dialogHead('Disconnect automatic imports?')+'<p>Your current iPhone key will stop working. Your saved entries will stay in your log.</p><p id="health-pair-error" class="tiny danger" role="alert"></p><button class="primary" id="health-revoke-confirm">Disconnect</button>');
+    $('health-revoke-confirm').onclick=async()=>{
+      healthBusy=true;$('health-revoke-confirm').disabled=true;$('close-dialog').disabled=true;
+      try{healthConnection=await api('revokeHealthSyncKey',{baseRevision:healthConnection.revision});healthPreferences.sleep=false;healthPreferences.steps=false;$('editor').close();render();toast('Automatic imports disconnected');}
+      catch(error){$('health-pair-error').textContent=error.message;$('health-revoke-confirm').disabled=false;}
+      finally{healthBusy=false;$('close-dialog').disabled=false;render();}
+    };
+  }
+  async function changeHealthDirection(input) {
+    if(healthBusy||healthStatusBusy)return;
+    const key=input.dataset.healthDirection,next=input.value==='on',previous=healthPreferences[key];
+    if(key!=='weight'&&!healthConnection&&!preview){toast('Refresh sync status before changing this direction.');render();return;}
+    healthBusy=true;input.disabled=true;
+    try{
+      if(key!=='weight'&&healthConnection?.paired){healthConnection=await api('saveHealthSyncPreferences',{baseRevision:healthConnection.revision,sleep:key==='sleep'?next:healthPreferences.sleep,steps:key==='steps'?next:healthPreferences.steps});}
+      healthPreferences[key]=next;
+      try{localStorage.setItem(healthPreferencesKey,JSON.stringify(healthPreferences));}catch{}
+    }catch(error){healthPreferences[key]=previous;toast(error.message);}
+    finally{healthBusy=false;render();}
+  }
   function renderAppleHealth() {
     const directions=[['sleep','Sleep','Apple Health → Daily Health'],['steps','Watch steps','Apple Health → Daily Health'],['weight','Weight','Daily Health → Apple Health']];
-    return heading('Apple Health','Sync when you choose')+`<section class="card settings-card"><h2>Your directions</h2><p class="settings-intro">Free iPhone Shortcuts connect your Health app. Run a sync when you want; this version does not run in the background.</p>${directions.map(([key,label,direction])=>`<div class="field"><label for="health-direction-${key}">${label}</label><select id="health-direction-${key}" data-health-direction="${key}"><option value="on" ${healthPreferences[key]?'selected':''}>${direction}</option><option value="off" ${healthPreferences[key]?'':'selected'}>Off</option></select></div>`).join('')}<p class="tiny">These choices stay on this device. JEFIT importing is off; keep recording lifting and its grade here.</p><a class="full-button health-guide-link" href="https://health.theaubuchonfamily.com/apple-health-setup.html" target="_blank" rel="noopener">Set up the iPhone Shortcuts ${icon('chevron')}</a></section>
-    <section class="card settings-card"><h2>Bring in sleep</h2><p class="settings-intro">Run Daily Health Sleep on your iPhone, then return here and paste its result. Review each night before saving.</p><div class="health-actions"><a class="secondary health-action ${healthPreferences.sleep?'':'disabled-link'}" ${healthPreferences.sleep?`href="${AppleHealthBridge.shortcutUrl('Daily Health Sleep')}"`:'aria-disabled="true"'}>Run sleep Shortcut</a><button class="primary health-action" id="health-import-sleep" ${healthPreferences.sleep?'':'disabled'}>Paste sleep</button></div><p class="tiny">Sleep is stored in your private Sheet. Existing entries are only replaced if you select them in the review.</p></section>
+    return heading('Apple Health','Connected to your routine')+healthConnectionCard()+`<section class="card settings-card"><h2>Your directions</h2><p class="settings-intro">When connected, turning sleep or steps off also stops incoming automatic imports. Weight uses your iPhone Shortcut when you choose to send a saved reading.</p>${directions.map(([key,label,direction])=>`<div class="field"><label for="health-direction-${key}">${label}</label><select id="health-direction-${key}" data-health-direction="${key}" ${healthBusy||healthStatusBusy?'disabled':''}><option value="on" ${healthPreferences[key]?'selected':''}>${direction}</option><option value="off" ${healthPreferences[key]?'':'selected'}>Off</option></select></div>`).join('')}<p class="tiny">Automatic imports preserve manual entries and corrections. JEFIT importing is off; keep recording lifting and its grade here.</p></section>
+    <details class="health-manual"><summary>Manual import backup</summary><section class="card settings-card"><h2>Bring in sleep</h2><p class="settings-intro">Run Daily Health Sleep on your iPhone, then return here and paste its result. Review each night before saving.</p><div class="health-actions"><a class="secondary health-action ${healthPreferences.sleep?'':'disabled-link'}" ${healthPreferences.sleep?`href="${AppleHealthBridge.shortcutUrl('Daily Health Sleep')}"`:'aria-disabled="true"'}>Run sleep Shortcut</a><button class="primary health-action" id="health-import-sleep" ${healthPreferences.sleep?'':'disabled'}>Paste sleep</button></div><p class="tiny">Sleep is stored in your private Sheet. Existing entries are only replaced if you select them in the review.</p></section>
     <section class="card settings-card"><h2>Bring in Watch steps</h2><p class="settings-intro">Run Daily Health Steps, then paste its result. Watch counts may differ from Apple Health’s combined total. Import after the day ends for a complete day.</p><div class="health-actions"><a class="secondary health-action ${healthPreferences.steps?'':'disabled-link'}" ${healthPreferences.steps?`href="${AppleHealthBridge.shortcutUrl('Daily Health Steps')}"`:'aria-disabled="true"'}>Run steps Shortcut</a><button class="primary health-action" id="health-import-steps" ${healthPreferences.steps?'':'disabled'}>Paste steps</button></div></section>
-    <section class="card settings-card"><h2>Send a saved weight</h2><p class="settings-intro">Choose a day with a saved home-scale weight. Your iPhone Shortcut checks for an existing weight that day before adding one.</p><div class="field"><label for="health-weight-date">Weight date</label><input id="health-weight-date" type="date" max="${state.today}" value="${state.selected}"></div><button class="primary health-action" id="health-export-weight" ${healthPreferences.weight?'':'disabled'}>Review weight to send</button><p class="tiny">Apple Health confirms the save in Shortcuts. Sending a weight does not change your Daily Health log.</p></section><button class="text-button" id="health-back-settings">Back to Settings</button>`;
+    </details><section class="card settings-card"><h2>Send a saved weight</h2><p class="settings-intro">Choose a day with a saved home-scale weight. Your iPhone Shortcut checks for an existing weight that day before adding one.</p><div class="field"><label for="health-weight-date">Weight date</label><input id="health-weight-date" type="date" max="${state.today}" value="${state.selected}"></div><button class="primary health-action" id="health-export-weight" ${healthPreferences.weight?'':'disabled'}>Review weight to send</button><p class="tiny">Apple Health confirms the save in Shortcuts. Sending a weight does not change your Daily Health log.</p></section><button class="text-button" id="health-back-settings">Back to Settings</button>`;
   }
   function openSleepImport(kind='sleep') {
     if(!healthPreferences[kind])return;
@@ -317,7 +387,7 @@
     const s=state.settings, value=n=>n===null?'':C.asUnit(n,s.unit).toFixed(1);
     const account = pages ? '<section class="card settings-card"><div class="settings-row"><span>Google connection</span><button id="reconnect-google">Reconnect</button></div><div class="settings-row"><span>On this device</span><button id="disconnect-google">Sign out of this app</button></div><p class="tiny">Your Sheet stays private. Reconnect whenever Google asks.</p></section>' : '';
     return heading('Settings','Make this fit your routine')+account+`<form id="settings-form"><section class="card settings-card"><h2>Your preferences</h2><div class="field-pair"><div class="field"><label for="unit">Weight unit</label><select id="unit" name="unit"><option value="lb" ${s.unit==='lb'?'selected':''}>Pounds (lb)</option><option value="kg" ${s.unit==='kg'?'selected':''}>Kilograms (kg)</option></select></div><div class="field"><label for="weightMode">Current focus</label><select id="weightMode" name="weightMode"><option value="lose" ${s.weightMode==='lose'?'selected':''}>Losing weight</option><option value="maintain" ${s.weightMode==='maintain'?'selected':''}>Maintaining</option></select></div></div><p class="tiny">Changing your focus preserves your history.</p><div class="field"><label for="goalWeight">Optional target weight (${s.unit})</label><input type="number" step="0.1" min="0.1" id="goalWeight" name="goalWeight" value="${value(s.goalWeightKg)}" placeholder="No target"></div><div class="field-pair"><div class="field"><label for="rangeMin">Maintenance minimum (${s.unit})</label><input type="number" id="rangeMin" name="rangeMin" step="0.1" value="${value(s.rangeMinKg)}" placeholder="Optional"></div><div class="field"><label for="rangeMax">Maintenance maximum (${s.unit})</label><input type="number" id="rangeMax" name="rangeMax" step="0.1" value="${value(s.rangeMaxKg)}" placeholder="Optional"></div></div><h3 style="margin-top:22px">Sleep goal <span class="tiny">Optional</span></h3>${sleepInputs('sleep-goal',s.sleepGoalMinutes)}<p class="tiny">Leave both fields blank for no sleep goal.</p><div class="field-pair"><div class="field"><label for="exerciseGoal">Exercise days per week</label><input id="exerciseGoal" name="exerciseGoal" type="number" min="1" max="7" step="1" value="${s.exerciseGoal===null?'':s.exerciseGoal}" placeholder="Optional"></div></div><label class="switch-label" for="sportEnabled"><span>Show Sport button</span><input type="checkbox" id="sportEnabled" name="sportEnabled" ${s.sportEnabled?'checked':''}></label><div class="field"><label for="timezone">Timezone</label><input id="timezone" name="timezone" value="${escape(s.timezone)}" required></div><div class="field"><label for="weekStart">Week starts on</label><select id="weekStart" name="weekStart"><option value="1" ${s.weekStart===1?'selected':''}>Monday</option><option value="0" ${s.weekStart===0?'selected':''}>Sunday</option></select></div><p class="tiny">Your log keeps this timezone while traveling. Existing dates do not move.</p><div id="settings-error" class="error-box" hidden></div><button class="finish" id="save-settings" style="margin-top:22px">Save preferences</button></section></form>
-    <section class="card settings-card"><h2>Apple Health</h2><p class="settings-intro">Import sleep and Watch steps, and send saved weights using free iPhone Shortcuts.</p><button id="open-apple-health" class="full-button">Set up or run sync ${icon('chevron')}</button></section><section class="card settings-card"><h2>Your data</h2><p class="settings-intro">${preview?'This preview stores entries only in this browser. Your Google Sheet is separate.':'Your entries are stored in your private Google Sheet.'}</p>${state.spreadsheetUrl?`<div class="settings-row"><span>Private data Sheet</span><a href="${escape(state.spreadsheetUrl)}" target="_blank" rel="noopener">Open Sheet ${icon('chevron')}</a></div>`:''}<div class="settings-row"><span>Full backup</span><button id="export-json">Export JSON ${icon('export')}</button></div><div class="settings-row"><span>For a spreadsheet</span><button id="export-csv">Export CSV ${icon('export')}</button></div><div class="settings-row"><span>Restore missing days</span><button id="restore">Import backup ${icon('chevron')}</button></div><p class="tiny" style="margin-top:15px">Imports add missing dates without overwriting existing entries. Keep occasional backups in private storage.</p></section><p class="tiny" style="text-align:center">Daily Health · Version 0.5.0</p>`;
+    <section class="card settings-card"><h2>Apple Health</h2><p class="settings-intro">Import sleep and Watch steps, and send saved weights using free iPhone Shortcuts.</p><button id="open-apple-health" class="full-button">Manage Apple Health ${icon('chevron')}</button></section><section class="card settings-card"><h2>Your data</h2><p class="settings-intro">${preview?'This preview stores entries only in this browser. Your Google Sheet is separate.':'Your entries are stored in your private Google Sheet.'}</p>${state.spreadsheetUrl?`<div class="settings-row"><span>Private data Sheet</span><a href="${escape(state.spreadsheetUrl)}" target="_blank" rel="noopener">Open Sheet ${icon('chevron')}</a></div>`:''}<div class="settings-row"><span>Full backup</span><button id="export-json">Export JSON ${icon('export')}</button></div><div class="settings-row"><span>For a spreadsheet</span><button id="export-csv">Export CSV ${icon('export')}</button></div><div class="settings-row"><span>Restore missing days</span><button id="restore">Import backup ${icon('chevron')}</button></div><p class="tiny" style="margin-top:15px">Imports add missing dates without overwriting existing entries. Keep occasional backups in private storage.</p></section><p class="tiny" style="text-align:center">Daily Health · Version 0.6.0</p>`;
   }
   function render() {
     if(!state.loaded)return;
@@ -342,13 +412,16 @@
     }catch(error){$('metric-error').textContent=error.message;}};
   }
   function bind() {
-    if($('open-apple-health'))$('open-apple-health').onclick=()=>safeNavigate(()=>state.tab='health');
+    if($('open-apple-health'))$('open-apple-health').onclick=()=>{safeNavigate(()=>state.tab='health');if(state.tab==='health')refreshHealthConnection();};
     if($('health-back-settings'))$('health-back-settings').onclick=()=>safeNavigate(()=>state.tab='settings');
     if($('health-import-sleep'))$('health-import-sleep').onclick=()=>openSleepImport('sleep');
     if($('health-import-steps'))$('health-import-steps').onclick=()=>openSleepImport('steps');
     if($('edit-steps'))$('edit-steps').onclick=editSteps;
     if($('health-export-weight'))$('health-export-weight').onclick=reviewHealthWeight;
-    document.querySelectorAll('[data-health-direction]').forEach(input=>input.onchange=()=>{healthPreferences[input.dataset.healthDirection]=input.value==='on';try{localStorage.setItem(healthPreferencesKey,JSON.stringify(healthPreferences));}catch{toast('This browser could not remember your sync preferences.');}render();});
+    if($('health-pair'))$('health-pair').onclick=pairHealthPhone;
+    if($('health-sync-refresh'))$('health-sync-refresh').onclick=refreshHealthConnection;
+    if($('health-revoke'))$('health-revoke').onclick=disconnectHealthPhone;
+    document.querySelectorAll('[data-health-direction]').forEach(input=>input.onchange=()=>changeHealthDirection(input));
     document.querySelectorAll('[data-rating]').forEach(button=>button.onclick=()=>queueSave({workoutRating:visibleDay().workoutRating===button.dataset.rating?null:button.dataset.rating}));
     document.querySelectorAll('[data-pattern-direction]').forEach(button=>button.onclick=()=>{patternState.direction=button.dataset.patternDirection;render();});
     if($('pattern-factor'))$('pattern-factor').onchange=e=>{patternState.factor=e.target.value;render();};
@@ -359,9 +432,9 @@
     if($('reconnect-google'))$('reconnect-google').onclick=e=>connectGoogle(e.currentTarget);
     if($('disconnect-google'))$('disconnect-google').onclick=()=>{
       if(state.queue.length||state.busy){toast('Finish saving your pending entry before signing out.');return;}
-      HealthConnection.disconnect();
+      HealthConnection.disconnect();connectionGeneration++;
       Object.assign(state,{settings:C.clone(C.DEFAULTS),days:[],selected:'',today:'',tab:'today',historyMonth:'',loaded:false,failure:null,lastSaved:false,spreadsheetUrl:'',import:null});
-      healthReview=null;$('main').replaceChildren();$('dialog-content').replaceChildren();$('import-file').value='';$('toast').hidden=true;
+      healthReview=null;healthConnection=null;$('main').replaceChildren();$('dialog-content').replaceChildren();$('import-file').value='';$('toast').hidden=true;
       showConnection('Signed out of Daily Health. Connect Google to open your log.');
     };
     document.querySelectorAll('[data-habit]').forEach(b=>b.onclick=()=>{const day=visibleDay(),key=b.dataset.habit,done=C.EXERCISE.includes(key)?day.exerciseComplete:day.foodComplete;queueSave({[key]:day[key]===true?(done?false:null):true});});
@@ -436,7 +509,20 @@
   window.addEventListener('beforeunload',e=>{if(state.queue.length||healthBusy){e.preventDefault();e.returnValue='';}});
   window.addEventListener('online',()=>{if(state.failure?.retryable)toast('Back online. Retry your pending save.');});
   window.addEventListener('offline',()=>toast('Offline. Reconnect before saving changes.'));
-  document.addEventListener('visibilitychange',()=>{if(!document.hidden&&state.loaded){const next=C.today(state.settings.timezone);if(next!==state.today&&!state.queue.length){if(state.selected===state.today)state.selected=next;state.today=next;render();}}});
+  let lastResumeRefresh=0;
+  document.addEventListener('visibilitychange',async()=>{
+    if(document.hidden||!state.loaded||state.queue.length||state.busy||healthBusy||$('editor').open||Date.now()-lastResumeRefresh<15000)return;
+    lastResumeRefresh=Date.now();
+    const generation=connectionGeneration;
+    const revisions=JSON.stringify(state.days.map(day=>[day.date,day.revision]));
+    try{
+      const latest=await api('getBootstrap');
+      if(generation!==connectionGeneration||document.hidden||state.queue.length||state.busy||healthBusy||$('editor').open||JSON.stringify(state.days.map(day=>[day.date,day.revision]))!==revisions)return;
+      if(state.selected===state.today)state.selected=latest.today;
+      state.today=latest.today;state.days=latest.days;state.settings=latest.settings;render();
+      if(state.tab==='health')refreshHealthConnection();
+    }catch(error){if(error.signIn)toast('Reconnect Google to see your latest entries.');}
+  });
   $('editor').addEventListener('cancel',e=>{if(healthBusy)e.preventDefault();});
   $('editor').addEventListener('close',()=>{if(!$('editor').open&&!healthBusy){$('dialog-content').replaceChildren();healthReview=null;}});
   if(preview)$('preview-banner').hidden=false;

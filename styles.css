@@ -50,3 +50,7 @@
 .privacy-page p{color:var(--muted);font-size:15px}
 .health-actions{display:flex;gap:10px;flex-wrap:wrap;margin:18px 0}.health-action{display:inline-flex;justify-content:center;align-items:center;min-height:48px;padding:13px 18px;border-radius:13px;font-size:14px;font-weight:600;text-align:center;text-decoration:none}.health-guide-link{display:flex;align-items:center;gap:6px;margin:16px 0}.disabled-link{opacity:.45;pointer-events:none}.health-paste{display:block;width:100%;padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--text);font:14px/1.5 ui-monospace,monospace;resize:vertical}.health-review-list{max-height:40vh;overflow:auto}.health-review-row{display:flex;gap:12px;padding:14px 0;border-bottom:1px solid var(--line);align-items:center}.health-review-row input{width:22px;height:22px;flex-shrink:0;accent-color:var(--blue)}.health-review-row span span,.health-review-row small{display:block}.health-review-row small{font-size:12px;color:var(--muted);margin-top:3px}
 .steps-card{grid-column:1/-1}
+.health-manual { margin:20px 0; }
+.health-manual > summary { min-height:44px; cursor:pointer; color:var(--muted,#52657c); padding:12px 4px; }
+#health-sync-url, #health-sync-key { display:block; width:100%; margin:8px 0; }
+#health-copy-url, #health-copy-key { margin-bottom:18px; }
