@@ -109,17 +109,26 @@
       ? 'Connect with the Google account that owns your log.'
       : 'Your Google connection is being set up. Check back shortly.');
     $('connect-google').disabled = !HealthConnection.ready();
+    $('connect-google').textContent = HealthConnection.rememberedUntil() ? 'Try again' : 'Connect Google';
   }
   async function connectGoogle(button) {
     button.disabled = true;
     try {
-      await HealthConnection.connect();
+      if(button.id==='connect-google'&&HealthConnection.rememberedUntil()){await load();return;}
+      const connection=await HealthConnection.connect({remember:button.id!=='connect-google'||$('remember-device')?.checked!==false});
       if (!state.loaded) await load();
       else { toast('Google connected. You can retry your save.'); render(); }
+      if(connection.warning)toast(connection.warning);
     } catch (error) {
       if (!state.loaded) showConnection(error.message);
       else toast(error.message);
     } finally { button.disabled = false; }
+  }
+  function clearSignedInPage(message) {
+    connectionGeneration++;
+    Object.assign(state,{settings:C.clone(C.DEFAULTS),days:[],selected:'',today:'',tab:'today',historyMonth:'',loaded:false,queue:[],busy:false,failure:null,lastSaved:false,spreadsheetUrl:'',import:null});
+    healthReview=null;healthConnection=null;$('main').replaceChildren();$('editor').close();$('dialog-content').replaceChildren();$('import-file').value='';$('toast').hidden=true;
+    showConnection(message||'Signed out of Daily Health. Connect Google to open your log.');
   }
   function savedDay(date) { return state.days.find(d => d.date === date) || C.blankDay(date); }
   function visibleDay(date=state.selected) {
@@ -148,16 +157,18 @@
   async function pump() {
     if (state.busy || state.failure || !state.queue.length) return;
     state.busy = true;
+    const generation=connectionGeneration;
     while (state.queue.length && !state.failure) {
       const task = state.queue[0];
       if (!task.request) task.request = { ...task, baseRevision: savedDay(task.date).revision };
       try {
         const result = await api('saveDay', task.request);
+        if(generation!==connectionGeneration)return;
         if (result.conflict) {
           putDay(result.day); state.queue = [];
           state.failure = { retryable: false, message: 'This day changed in another window. The latest entry is shown. Review it and make your change again.' };
         } else { putDay(result.day); state.queue.shift(); state.lastSaved = true; }
-      } catch (error) { state.failure = { retryable: true, message: error.message, signIn: error.signIn }; }
+      } catch (error) { if(generation!==connectionGeneration)return;state.failure = { retryable: true, message: error.message, signIn: error.signIn }; }
       render();
     }
     state.busy = false; render();
@@ -386,9 +397,10 @@
   }
   function renderSettings() {
     const s=state.settings, value=n=>n===null?'':C.asUnit(n,s.unit).toFixed(1);
-    const account = pages ? '<section class="card settings-card"><div class="settings-row"><span>Google connection</span><button id="reconnect-google">Reconnect</button></div><div class="settings-row"><span>On this device</span><button id="disconnect-google">Sign out of this app</button></div><p class="tiny">Your Sheet stays private. Reconnect whenever Google asks.</p></section>' : '';
+    const remembered=pages&&HealthConnection.rememberedUntil();
+    const account = pages ? `<section class="card settings-card"><h2>Your connection</h2><p class="settings-intro">${remembered?'This device is remembered until '+new Date(remembered).toLocaleDateString()+'. Open the app anytime to continue.':'Signed in for this visit. Remember this device to skip sign-in next time.'}</p>${remembered?'':'<button class="secondary" id="reconnect-google">Remember this device</button>'}<div class="settings-row"><span>On this device</span><button id="disconnect-google">Sign out</button></div><div class="settings-row"><span>Lost a device?</span><button id="signout-all">Sign out all devices</button></div><p class="tiny">Your Sheet stays private. Clearing browser data or reinstalling the app may require signing in again.</p></section>` : '';
     return heading('Settings','Make this fit your routine')+account+`<form id="settings-form"><section class="card settings-card"><h2>Your preferences</h2><div class="field-pair"><div class="field"><label for="unit">Weight unit</label><select id="unit" name="unit"><option value="lb" ${s.unit==='lb'?'selected':''}>Pounds (lb)</option><option value="kg" ${s.unit==='kg'?'selected':''}>Kilograms (kg)</option></select></div><div class="field"><label for="weightMode">Current focus</label><select id="weightMode" name="weightMode"><option value="lose" ${s.weightMode==='lose'?'selected':''}>Losing weight</option><option value="maintain" ${s.weightMode==='maintain'?'selected':''}>Maintaining</option></select></div></div><p class="tiny">Changing your focus preserves your history.</p><div class="field"><label for="goalWeight">Optional target weight (${s.unit})</label><input type="number" step="0.1" min="0.1" id="goalWeight" name="goalWeight" value="${value(s.goalWeightKg)}" placeholder="No target"></div><div class="field-pair"><div class="field"><label for="rangeMin">Maintenance minimum (${s.unit})</label><input type="number" id="rangeMin" name="rangeMin" step="0.1" value="${value(s.rangeMinKg)}" placeholder="Optional"></div><div class="field"><label for="rangeMax">Maintenance maximum (${s.unit})</label><input type="number" id="rangeMax" name="rangeMax" step="0.1" value="${value(s.rangeMaxKg)}" placeholder="Optional"></div></div><h3 style="margin-top:22px">Sleep goal <span class="tiny">Optional</span></h3>${sleepInputs('sleep-goal',s.sleepGoalMinutes)}<p class="tiny">Leave both fields blank for no sleep goal.</p><div class="field-pair"><div class="field"><label for="exerciseGoal">Exercise days per week</label><input id="exerciseGoal" name="exerciseGoal" type="number" min="1" max="7" step="1" value="${s.exerciseGoal===null?'':s.exerciseGoal}" placeholder="Optional"></div></div><label class="switch-label" for="sportEnabled"><span>Show Sport button</span><input type="checkbox" id="sportEnabled" name="sportEnabled" ${s.sportEnabled?'checked':''}></label><div class="field"><label for="timezone">Timezone</label><input id="timezone" name="timezone" value="${escape(s.timezone)}" required></div><div class="field"><label for="weekStart">Week starts on</label><select id="weekStart" name="weekStart"><option value="1" ${s.weekStart===1?'selected':''}>Monday</option><option value="0" ${s.weekStart===0?'selected':''}>Sunday</option></select></div><p class="tiny">Your log keeps this timezone while traveling. Existing dates do not move.</p><div id="settings-error" class="error-box" hidden></div><button class="finish" id="save-settings" style="margin-top:22px">Save preferences</button></section></form>
-    <section class="card settings-card"><h2>Apple Health</h2><p class="settings-intro">Import sleep and Watch steps, and send saved weights using free iPhone Shortcuts.</p><button id="open-apple-health" class="full-button">Manage Apple Health ${icon('chevron')}</button></section><section class="card settings-card"><h2>Your data</h2><p class="settings-intro">${preview?'This preview stores entries only in this browser. Your Google Sheet is separate.':'Your entries are stored in your private Google Sheet.'}</p>${state.spreadsheetUrl?`<div class="settings-row"><span>Private data Sheet</span><a href="${escape(state.spreadsheetUrl)}" target="_blank" rel="noopener">Open Sheet ${icon('chevron')}</a></div>`:''}<div class="settings-row"><span>Full backup</span><button id="export-json">Export JSON ${icon('export')}</button></div><div class="settings-row"><span>For a spreadsheet</span><button id="export-csv">Export CSV ${icon('export')}</button></div><div class="settings-row"><span>Restore missing days</span><button id="restore">Import backup ${icon('chevron')}</button></div><p class="tiny" style="margin-top:15px">Imports add missing dates without overwriting existing entries. Keep occasional backups in private storage.</p></section><p class="tiny" style="text-align:center">Daily Health · Version 0.8.0</p>`;
+    <section class="card settings-card"><h2>Apple Health</h2><p class="settings-intro">Import sleep and Watch steps, and send saved weights using free iPhone Shortcuts.</p><button id="open-apple-health" class="full-button">Manage Apple Health ${icon('chevron')}</button></section><section class="card settings-card"><h2>Your data</h2><p class="settings-intro">${preview?'This preview stores entries only in this browser. Your Google Sheet is separate.':'Your entries are stored in your private Google Sheet.'}</p>${state.spreadsheetUrl?`<div class="settings-row"><span>Private data Sheet</span><a href="${escape(state.spreadsheetUrl)}" target="_blank" rel="noopener">Open Sheet ${icon('chevron')}</a></div>`:''}<div class="settings-row"><span>Full backup</span><button id="export-json">Export JSON ${icon('export')}</button></div><div class="settings-row"><span>For a spreadsheet</span><button id="export-csv">Export CSV ${icon('export')}</button></div><div class="settings-row"><span>Restore missing days</span><button id="restore">Import backup ${icon('chevron')}</button></div><p class="tiny" style="margin-top:15px">Imports add missing dates without overwriting existing entries. Keep occasional backups in private storage.</p></section><p class="tiny" style="text-align:center">Daily Health · Version 0.9.0</p>`;
   }
   function render() {
     if(!state.loaded)return;
@@ -448,12 +460,16 @@
       queueSave({[key]:visibleDay()[key]===value?null:value});
     });
     if($('reconnect-google'))$('reconnect-google').onclick=e=>connectGoogle(e.currentTarget);
-    if($('disconnect-google'))$('disconnect-google').onclick=()=>{
+    if($('disconnect-google'))$('disconnect-google').onclick=async()=>{
       if(state.queue.length||state.busy){toast('Finish saving your pending entry before signing out.');return;}
-      HealthConnection.disconnect();connectionGeneration++;
-      Object.assign(state,{settings:C.clone(C.DEFAULTS),days:[],selected:'',today:'',tab:'today',historyMonth:'',loaded:false,failure:null,lastSaved:false,spreadsheetUrl:'',import:null});
-      healthReview=null;healthConnection=null;$('main').replaceChildren();$('dialog-content').replaceChildren();$('import-file').value='';$('toast').hidden=true;
-      showConnection('Signed out of Daily Health. Connect Google to open your log.');
+      const pending=HealthConnection.disconnect();clearSignedInPage();
+      const result=await pending;
+      if(!result.revoked&&!state.loaded)showConnection('Signed out here. Remote sign-out could not be confirmed. Connect again when online, then use Sign out all devices.');
+    };
+    if($('signout-all'))$('signout-all').onclick=()=>{
+      if(state.queue.length||state.busy){toast('Finish your pending save first.');return;}
+      openDialog(dialogHead('Sign out all devices?')+'<p>Every remembered phone and browser will need to connect Google again. Your saved log stays in your Sheet. Confirm with your Google account to continue.</p><p class="tiny danger" id="signout-error" role="alert"></p><button class="primary" id="signout-confirm">Confirm with Google</button>');
+      $('signout-confirm').onclick=async e=>{e.currentTarget.disabled=true;try{await HealthConnection.signOutAll();clearSignedInPage('All remembered devices are signed out.');}catch(error){$('signout-error').textContent=error.message;$('signout-confirm').disabled=false;}};
     };
     document.querySelectorAll('[data-habit]').forEach(b=>b.onclick=()=>{const day=visibleDay(),key=b.dataset.habit,done=C.EXERCISE.includes(key)?day.exerciseComplete:day.foodComplete;queueSave({[key]:day[key]===true?(done?false:null):true});});
     document.querySelectorAll('[data-quality]').forEach(b=>b.onclick=()=>queueSave({quality:visibleDay().quality===b.dataset.quality?null:b.dataset.quality}));
@@ -519,7 +535,8 @@
     }catch(error){toast(error.message);}
   };
   async function load() {
-    try{const data=await api('getBootstrap');state.settings=C.validateSettings(data.settings);state.days=data.days.map(day=>({...C.blankDay(day.date),...day}));state.today=data.today;state.selected=state.selected||state.today;state.spreadsheetUrl=data.spreadsheetUrl;state.loaded=true;document.body.classList.remove('connection-locked');render();}
+    const generation=connectionGeneration;
+    try{const data=await api('getBootstrap');if(generation!==connectionGeneration)return;state.settings=C.validateSettings(data.settings);state.days=data.days.map(day=>({...C.blankDay(day.date),...day}));state.today=data.today;state.selected=state.selected||state.today;state.spreadsheetUrl=data.spreadsheetUrl;state.loaded=true;document.body.classList.remove('connection-locked');render();}
     catch(error){if(pages&&!state.loaded){showConnection(error.message);return;}$('main').innerHTML=`<div class="card"><h2>Couldn’t open your log</h2><p class="settings-intro">${escape(error.message)}</p><button id="reload" class="finish">Try again</button></div>`;$('reload').onclick=load;}
   }
   $('open-settings').innerHTML=icon('settings');$('open-settings').onclick=()=>safeNavigate(()=>state.tab=state.tab==='settings'?'today':'settings');
@@ -546,6 +563,10 @@
   $('editor').addEventListener('cancel',e=>{if(healthBusy)e.preventDefault();});
   $('editor').addEventListener('close',()=>{if(!$('editor').open&&!healthBusy){$('dialog-content').replaceChildren();healthReview=null;}});
   if(preview)$('preview-banner').hidden=false;
-  if(pages){showConnection();$('connect-google').onclick=e=>connectGoogle(e.currentTarget);}
+  if(pages){
+    $('connect-google').onclick=e=>connectGoogle(e.currentTarget);
+    window.addEventListener('storage',e=>{if((e.key===HealthConnection.storageKey&&e.newValue===null)||e.key===null){HealthConnection.forgetLocal();clearSignedInPage('Signed out in another window. Connect Google to open your log.');}});
+    if(HealthConnection.restore()){showConnection('Opening your log…');load();}else showConnection();
+  }
   else load();
 })();

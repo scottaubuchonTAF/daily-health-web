@@ -12,7 +12,7 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <title>Daily Health</title>
-  <link rel="stylesheet" href="/styles.css?v=00b82bfdf5ed">
+  <link rel="stylesheet" href="/styles.css?v=b71ee5b1dacc">
 </head>
 <body data-mode="pages" class="connection-locked">
   <section class="connection-screen" aria-labelledby="connection-title"><div class="login-card">
@@ -20,6 +20,8 @@
   <p class="login-eyebrow">A LITTLE, EVERY DAY</p><h1 id="connection-title">Daily Health</h1>
   <p class="login-intro">Small habits.<br>A clearer picture.</p>
   <button id="connect-google" class="finish" type="button">Connect Google</button>
+  <label class="remember-device"><input id="remember-device" type="checkbox" checked> Remember this device for 90 days</label>
+  <p class="tiny">Use this on your personal device. Sign out anytime in Settings.</p>
   <p id="connection-message" class="connection-message" role="status">Opening your connection…</p>
   <p class="tiny">Your daily log stays in your private Google Sheet.</p>
   <a class="privacy-link" href="/privacy.html">Privacy</a>
@@ -55,11 +57,11 @@
   <div id="toast" class="toast" role="status" hidden></div>
   <dialog id="editor"><div id="dialog-content"></div></dialog>
   <input type="file" id="import-file" accept="application/json,.json" hidden>
-  <script src="/core.js?v=00b82bfdf5ed"></script>
-  <script src="/apple-health.js?v=00b82bfdf5ed"></script>
-  <script src="/config.js?v=00b82bfdf5ed"></script>
-  <script src="/pages-api.js?v=00b82bfdf5ed"></script>
+  <script src="/core.js?v=b71ee5b1dacc"></script>
+  <script src="/apple-health.js?v=b71ee5b1dacc"></script>
+  <script src="/config.js?v=b71ee5b1dacc"></script>
+  <script src="/pages-api.js?v=b71ee5b1dacc"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <script src="/client.js?v=00b82bfdf5ed"></script>
+  <script src="/client.js?v=b71ee5b1dacc"></script>
 </body>
 </html>

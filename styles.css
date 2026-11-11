@@ -60,3 +60,5 @@
 .history-note{display:block;margin-top:6px;color:var(--text);font-size:13px;overflow-wrap:anywhere;line-height:1.45}
 .history-row>span:first-child{min-width:0}.history-status{flex-shrink:0}
 #notes-count{white-space:nowrap;margin-left:12px}
+
+.remember-device{display:flex;align-items:center;justify-content:center;gap:10px;font-size:14px;line-height:1.5;margin:18px 0 8px}.remember-device input{width:20px;height:20px;accent-color:var(--blue);flex-shrink:0}
