@@ -1,7 +1,8 @@
 /* Shared pure rules. Used unchanged in the browser, Apps Script, and tests. */
 var HealthCore = (function () {
   'use strict';
-  const VERSION = 2;
+  const VERSION = 3;
+  const WORKOUT_RATINGS = ['great', 'average', 'poor'];
   const DRINK_RANGES = ['1-3', '4-6', '7+'];
   const WATER_RANGES = ['0', 'under50', '50to100', 'over100'];
   const FOOD = ['fruit', 'veggie', 'protein', 'beer', 'margarita', 'chipsPretzels', 'sweets', 'ateOut'];
@@ -9,8 +10,8 @@ var HealthCore = (function () {
   const OTHER = ['zyn'];
   const HABITS = [...EXERCISE, ...FOOD, ...OTHER];
   // New columns go at the end so existing Sheet rows and older clients keep their positions.
-  const DAY_FIELDS = ['date', 'revision', 'mutationId', 'createdAt', 'updatedAt', 'weightKg', 'weightStatus', 'sleepMinutes', 'quality', ...HABITS, 'foodComplete', 'exerciseComplete', 'otherComplete', 'alcoholDrinks', 'waterOzRange'];
-  const EDITABLE = ['weightKg', 'weightStatus', 'sleepMinutes', 'quality', ...HABITS, 'alcoholDrinks', 'waterOzRange'];
+  const DAY_FIELDS = ['date', 'revision', 'mutationId', 'createdAt', 'updatedAt', 'weightKg', 'weightStatus', 'sleepMinutes', 'quality', ...HABITS, 'foodComplete', 'exerciseComplete', 'otherComplete', 'alcoholDrinks', 'waterOzRange', 'workoutRating'];
+  const EDITABLE = ['weightKg', 'weightStatus', 'sleepMinutes', 'quality', ...HABITS, 'alcoholDrinks', 'waterOzRange', 'workoutRating'];
   const DEFAULTS = { schemaVersion: VERSION, revision: 0, unit: 'lb', timezone: 'America/New_York', weekStart: 1, sportEnabled: false, weightMode: 'lose', goalWeightKg: null, rangeMinKg: null, rangeMaxKg: null, sleepGoalMinutes: null, exerciseGoal: null };
   const clone = x => JSON.parse(JSON.stringify(x));
   function assert(ok, message) { if (!ok) throw new Error(message); }
@@ -24,7 +25,8 @@ var HealthCore = (function () {
   }
   function addDays(date, n) { assert(validDate(date), 'Choose a valid date.'); const d = new Date(date + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
   function distance(a, b) { return Math.round((new Date(b + 'T12:00:00Z') - new Date(a + 'T12:00:00Z')) / 86400000); }
-  function blankDay(date) { return Object.assign({ date, revision: 0, mutationId: '', createdAt: '', updatedAt: '', weightKg: null, weightStatus: 'missing', sleepMinutes: null, quality: null, alcoholDrinks: null, waterOzRange: null, foodComplete: false, exerciseComplete: false, otherComplete: false }, Object.fromEntries(HABITS.map(k => [k, null]))); }
+  function blankDay(date) { return Object.assign({ date, revision: 0, mutationId: '', createdAt: '', updatedAt: '', weightKg: null, weightStatus: 'missing', sleepMinutes: null, quality: null, alcoholDrinks: null, waterOzRange: null, workoutRating: null, foodComplete: false, exerciseComplete: false, otherComplete: false }, Object.fromEntries(HABITS.map(k => [k, null]))); }
+  function hasWorkout(day) { return !!day && EXERCISE.some(key => day[key] === true); }
   function complete(day) { return !!(day.foodComplete && day.exerciseComplete && day.otherComplete); }
   function hasContent(day) { return !!(day && (day.weightKg !== null || day.weightStatus === 'away' || day.sleepMinutes !== null || day.quality !== null || day.alcoholDrinks != null || day.waterOzRange != null || HABITS.some(k => day[k] !== null) || complete(day))); }
   function asKg(n, unit) { return unit === 'lb' ? n / 2.2046226218 : n; }
@@ -41,6 +43,8 @@ var HealthCore = (function () {
     assert([null, 'healthy', 'unhealthy'].includes(day.quality), 'Choose Healthy or Unhealthy.');
     assert(day.alcoholDrinks === null || DRINK_RANGES.includes(day.alcoholDrinks), 'Choose 1–3, 4–6, or 7+ drinks.');
     assert(day.waterOzRange === null || WATER_RANGES.includes(day.waterOzRange), 'Choose a water amount.');
+    assert(day.workoutRating === null || WORKOUT_RATINGS.includes(day.workoutRating), 'Choose Great, Average, or Poor.');
+    assert(day.workoutRating === null || hasWorkout(day), 'Select your exercise before grading your workout.');
     HABITS.forEach(k => assert(day[k] === null || typeof day[k] === 'boolean', 'Invalid habit: ' + k));
     ['foodComplete', 'exerciseComplete', 'otherComplete'].forEach(k => assert(typeof day[k] === 'boolean', 'Invalid completion state.'));
     assert(!day.foodComplete || FOOD.every(k => typeof day[k] === 'boolean'), 'Finished food entries must include explicit yes/no values.');
@@ -52,6 +56,8 @@ var HealthCore = (function () {
     assert(patch && typeof patch === 'object' && !Array.isArray(patch), 'Invalid update.');
     const next = { ...blankDay(day.date), ...clone(day) };
     Object.keys(patch).forEach(k => { assert(EDITABLE.includes(k), 'Unknown field: ' + k); next[k] = patch[k]; });
+    // Removing the last exercise also clears its grade; old clients preserve grades on unrelated edits.
+    if (!hasWorkout(next) && EXERCISE.some(key => Object.hasOwn(patch, key)) && !Object.hasOwn(patch, 'workoutRating')) next.workoutRating = null;
     if (action === 'finish') {
       [...FOOD, ...OTHER, 'lift', 'cardio', ...(settings.sportEnabled ? ['sport'] : [])].forEach(k => { if (next[k] === null) next[k] = false; });
       next.foodComplete = next.exerciseComplete = next.otherComplete = true;
@@ -112,7 +118,7 @@ var HealthCore = (function () {
     return { ready: true, estimateKg: estimate, lowerKg: estimate - band, upperKg: estimate + band, weeklyChangeKg: slope * 7, dataThrough: rows.at(-1).date, modelVersion: 'damped-trend-v1', detail: 'Preliminary next-7-day average if recent patterns continue. Range reflects recent variability; it is not a calibrated confidence interval.' };
   }
   function validateImport(data, lastDate) {
-    assert(data && [1, VERSION].includes(data.schemaVersion) && Array.isArray(data.days), 'Choose a Daily Health JSON export (version 1 or 2).');
+    assert(data && [1, 2, VERSION].includes(data.schemaVersion) && Array.isArray(data.days), 'Choose a Daily Health JSON export (version 1, 2, or 3).');
     assert(data.days.length <= 20000, 'This import contains too many days.');
     const seen = new Set();
     const days = data.days.map(raw => {
@@ -127,6 +133,45 @@ var HealthCore = (function () {
     const settings = validateSettings(data.settings || DEFAULTS);
     return { schemaVersion: VERSION, days, settings };
   }
-  return { VERSION, DRINK_RANGES, WATER_RANGES, FOOD, EXERCISE, OTHER, HABITS, DAY_FIELDS, DEFAULTS, EDITABLE, clone, assert, today, validDate, addDays, distance, blankDay, complete, hasContent, asKg, asUnit, formatWeight, applyPatch, validateDay, validateSettings, validateImport, weekDates, weekly, streak, weightSeries, forecast };
+  // Pair exact calendar dates. Never bridge a missing day or infer a missing habit.
+  function workoutPatterns(days, date, direction = 'before', factor = 'sleep') {
+    const factors = ['sleep', 'alcohol', 'water', 'quality', ...FOOD.filter(k => !['beer', 'margarita'].includes(k)), 'zyn'];
+    assert(['before', 'after'].includes(direction) && factors.includes(factor), 'Choose a workout comparison.');
+    const rows = days.filter(d => validDate(d.date) && d.date <= date);
+    const byDate = new Map(rows.map(d => [d.date, d]));
+    const workouts = rows.filter(d => distance(d.date, date) < 90 && hasWorkout(d) && WORKOUT_RATINGS.includes(d.workoutRating));
+    const score = { poor: 1, average: 2, great: 3 };
+    const waterNames = { '0': '0 oz', under50: 'Under 50 oz', '50to100': '50–100 oz', over100: 'Over 100 oz' };
+    const alcohol = day => day.alcoholDrinks != null || day.beer === true || day.margarita === true ? true : day.foodComplete && day.beer === false && day.margarita === false ? false : null;
+    function beforeGroup(day) {
+      if (!day) return null;
+      if (factor === 'sleep') return day.sleepMinutes == null ? null : day.sleepMinutes < 360 ? 'Under 6h sleep' : day.sleepMinutes < 480 ? '6–under 8h sleep' : '8h+ sleep';
+      if (factor === 'water') return waterNames[day.waterOzRange] || null;
+      if (factor === 'alcohol') return alcohol(day) === null ? null : alcohol(day) === false ? 'No alcohol logged' : DRINK_RANGES.includes(day.alcoholDrinks) ? day.alcoholDrinks.replace('-', '–') + ' drinks' : 'Alcohol · amount unlogged';
+      if (factor === 'quality') return day.quality === 'healthy' ? 'Healthy day' : day.quality === 'unhealthy' ? 'Unhealthy day' : null;
+      return day[factor] === true ? 'Yes' : day[factor] === false ? 'No' : null;
+    }
+    function afterValue(day) {
+      if (!day) return null;
+      if (factor === 'sleep') return day.sleepMinutes == null ? null : day.sleepMinutes / 60;
+      if (factor === 'water') return WATER_RANGES.includes(day.waterOzRange) ? (['50to100', 'over100'].includes(day.waterOzRange) ? 100 : 0) : null;
+      const value = factor === 'alcohol' ? alcohol(day) : factor === 'quality' ? day.quality === 'healthy' ? true : day.quality === 'unhealthy' ? false : null : day[factor];
+      return value === true ? 100 : value === false ? 0 : null;
+    }
+    const grouped = new Map();
+    for (const workout of workouts) {
+      const pairedDate = addDays(workout.date, direction === 'after' ? 1 : factor === 'sleep' ? 0 : -1);
+      const day = byDate.get(pairedDate);
+      const key = direction === 'before' ? beforeGroup(day) : workout.workoutRating;
+      const value = direction === 'before' ? score[workout.workoutRating] : afterValue(day);
+      if (key === null || value === null) continue;
+      if (!grouped.has(key)) grouped.set(key, { key, count: 0, total: 0, great: 0 });
+      const group = grouped.get(key); group.count++; group.total += value; group.great += workout.workoutRating === 'great' ? 1 : 0;
+    }
+    const groups = [...grouped.values()].map(g => ({ key: g.key, count: g.count, mean: g.total / g.count, greatPercent: g.great / g.count * 100 }));
+    if (direction === 'after') groups.sort((a,b) => WORKOUT_RATINGS.indexOf(a.key) - WORKOUT_RATINGS.indexOf(b.key));
+    return { direction, factor, ratedCount: workouts.length, pairedCount: groups.reduce((n,g) => n + g.count, 0), groups, minimum: 3, ready: groups.filter(g => g.count >= 3).length >= 2 };
+  }
+  return { VERSION, WORKOUT_RATINGS, DRINK_RANGES, WATER_RANGES, FOOD, EXERCISE, OTHER, HABITS, DAY_FIELDS, DEFAULTS, EDITABLE, clone, assert, today, validDate, addDays, distance, blankDay, complete, hasWorkout, hasContent, asKg, asUnit, formatWeight, applyPatch, validateDay, validateSettings, validateImport, weekDates, weekly, streak, weightSeries, forecast, workoutPatterns };
 })();
 if (typeof module !== 'undefined' && module.exports) module.exports = HealthCore;
