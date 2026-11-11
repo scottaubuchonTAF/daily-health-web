@@ -152,7 +152,7 @@
     }
     state.busy = false; render();
   }
-  function safeNavigate(fn) { if (state.queue.length || state.busy) { toast('Let your pending entry finish saving first.'); return; } fn(); render(); window.scrollTo({ top: 0, behavior: 'instant' }); }
+  function safeNavigate(fn) { if (state.queue.length || state.busy || healthBusy) { toast('Let your pending entry finish saving first.'); return; } fn(); render(); window.scrollTo({ top: 0, behavior: 'instant' }); }
   function longDate(date, options={month:'long',day:'numeric'}) { return new Date(date + 'T12:00:00Z').toLocaleDateString('en-US', { ...options, timeZone:'UTC' }); }
   function heading(title, subtitle) {
     const saving = state.queue.length > 0;
@@ -161,8 +161,82 @@
   function chip(key, label, glyph, day) { return `<button id="habit-${key}" class="chip" data-habit="${key}" aria-pressed="${day[key]===true}">${icon('check','check')}${glyph?icon(glyph,'habit-icon'):''}<span>${label}</span></button>`; }
   const waterLabels = { '0':'0', under50:'<50', '50to100':'50–100', over100:'>100' };
   const ratingLabels = { great:'Great', average:'Average', poor:'Poor' };
-  const patternLabels = { sleep:'Sleep', alcohol:'Alcohol', water:'Water', quality:'Overall eating', fruit:'Fruit', veggie:'Veggie', protein:'Protein', chipsPretzels:'Chips/Pretzels', sweets:'Sweets', ateOut:'Eating out', zyn:'Zyn' };
+  const patternLabels = { sleep:'Sleep', steps:'Watch steps', alcohol:'Alcohol', water:'Water', quality:'Overall eating', fruit:'Fruit', veggie:'Veggie', protein:'Protein', chipsPretzels:'Chips/Pretzels', sweets:'Sweets', ateOut:'Eating out', zyn:'Zyn' };
   const patternState = { direction:'before', factor:'sleep' };
+  const healthPreferencesKey = 'daily-health-sync-directions-v1';
+  let healthPreferences = { sleep:true, steps:true, weight:true };
+  try { const saved=JSON.parse(localStorage.getItem(healthPreferencesKey)||'null'); if(saved) for(const key of ['sleep','steps','weight']) if(typeof saved[key]==='boolean')healthPreferences[key]=saved[key]; } catch {}
+  let healthBusy=false, healthReview=null;
+  function renderAppleHealth() {
+    const directions=[['sleep','Sleep','Apple Health → Daily Health'],['steps','Watch steps','Apple Health → Daily Health'],['weight','Weight','Daily Health → Apple Health']];
+    return heading('Apple Health','Sync when you choose')+`<section class="card settings-card"><h2>Your directions</h2><p class="settings-intro">Free iPhone Shortcuts connect your Health app. Run a sync when you want; this version does not run in the background.</p>${directions.map(([key,label,direction])=>`<div class="field"><label for="health-direction-${key}">${label}</label><select id="health-direction-${key}" data-health-direction="${key}"><option value="on" ${healthPreferences[key]?'selected':''}>${direction}</option><option value="off" ${healthPreferences[key]?'':'selected'}>Off</option></select></div>`).join('')}<p class="tiny">These choices stay on this device. JEFIT importing is off; keep recording lifting and its grade here.</p><a class="full-button health-guide-link" href="https://health.theaubuchonfamily.com/apple-health-setup.html" target="_blank" rel="noopener">Set up the iPhone Shortcuts ${icon('chevron')}</a></section>
+    <section class="card settings-card"><h2>Bring in sleep</h2><p class="settings-intro">Run Daily Health Sleep on your iPhone, then return here and paste its result. Review each night before saving.</p><div class="health-actions"><a class="secondary health-action ${healthPreferences.sleep?'':'disabled-link'}" ${healthPreferences.sleep?`href="${AppleHealthBridge.shortcutUrl('Daily Health Sleep')}"`:'aria-disabled="true"'}>Run sleep Shortcut</a><button class="primary health-action" id="health-import-sleep" ${healthPreferences.sleep?'':'disabled'}>Paste sleep</button></div><p class="tiny">Sleep is stored in your private Sheet. Existing entries are only replaced if you select them in the review.</p></section>
+    <section class="card settings-card"><h2>Bring in Watch steps</h2><p class="settings-intro">Run Daily Health Steps, then paste its result. Watch counts may differ from Apple Health’s combined total. Import after the day ends for a complete day.</p><div class="health-actions"><a class="secondary health-action ${healthPreferences.steps?'':'disabled-link'}" ${healthPreferences.steps?`href="${AppleHealthBridge.shortcutUrl('Daily Health Steps')}"`:'aria-disabled="true"'}>Run steps Shortcut</a><button class="primary health-action" id="health-import-steps" ${healthPreferences.steps?'':'disabled'}>Paste steps</button></div></section>
+    <section class="card settings-card"><h2>Send a saved weight</h2><p class="settings-intro">Choose a day with a saved home-scale weight. Your iPhone Shortcut checks for an existing weight that day before adding one.</p><div class="field"><label for="health-weight-date">Weight date</label><input id="health-weight-date" type="date" max="${state.today}" value="${state.selected}"></div><button class="primary health-action" id="health-export-weight" ${healthPreferences.weight?'':'disabled'}>Review weight to send</button><p class="tiny">Apple Health confirms the save in Shortcuts. Sending a weight does not change your Daily Health log.</p></section><button class="text-button" id="health-back-settings">Back to Settings</button>`;
+  }
+  function openSleepImport(kind='sleep') {
+    if(!healthPreferences[kind])return;
+    const label=kind==='steps'?'Steps':'Sleep',field=kind==='steps'?'steps':'sleepMinutes';
+    openDialog(dialogHead('Import '+label.toLowerCase())+`<p class="settings-intro">Paste the result from Daily Health ${label}. Nothing is saved until you review it.</p><label class="sr-only" for="health-sleep-text">${label} Shortcut result</label><textarea id="health-sleep-text" class="health-paste" rows="7" placeholder="Paste your result here" spellcheck="false" autocomplete="off"></textarea><p id="health-error" class="tiny danger" role="alert"></p><div class="dialog-actions"><button class="secondary" id="health-read-clipboard">Paste from clipboard</button><button class="primary" id="health-review-sleep">Review days</button></div>`);
+    $('health-read-clipboard').onclick=async()=>{try{$('health-sleep-text').value=await navigator.clipboard.readText();}catch{$('health-error').textContent='Touch and hold the text box, then choose Paste.';}};
+    $('health-review-sleep').onclick=async()=>{
+      const button=$('health-review-sleep'),text=$('health-sleep-text').value;button.disabled=true;healthBusy=true;$('close-dialog').disabled=true;
+      try {
+        const latest=await api('getBootstrap');state.settings=C.validateSettings(latest.settings);state.days=latest.days.map(d=>({...C.blankDay(d.date),...d}));state.today=latest.today;
+        const imported=(kind==='steps'?AppleHealthBridge.parseSteps:AppleHealthBridge.parseSleep)(text,state.settings.timezone,state.today);
+        if(!imported.days.length)throw new Error(kind==='steps'?'No Apple Watch step samples were found. Check the Shortcut’s Source and Health permissions.':'No time asleep was found. Check the Shortcut’s Health permissions and date range.');
+        healthReview={kind,field,rows:AppleHealthBridge.samplePlan(imported.days,state.days,field),usedWatch:imported.usedWatch,tasks:null,done:0};
+        showSleepReview();
+      }catch(error){button.disabled=false;$('health-error').textContent=error.message;}finally{healthBusy=false;$('close-dialog').disabled=false;}
+    };
+  }
+  function showSleepReview() {
+    const review=healthReview,steps=review.kind==='steps',format=n=>steps?n.toLocaleString()+' steps':formatSleep(n);
+    openDialog(dialogHead(steps?'Review Watch steps':'Review sleep')+`<p class="settings-intro">${steps?'Watch samples only; iPhone counts are excluded. Today’s count may be incomplete.':'Awake time is excluded and overlapping samples count once. Nights use the date the sleep session ended.'} ${review.usedWatch?'Using Apple Watch samples.':'No Apple Watch source label was found; check these totals carefully.'} Check the oldest day in case the date range cuts it short.</p><div class="health-review-list">${review.rows.map((row,i)=>`<label class="health-review-row"><input type="checkbox" data-health-row="${i}" ${row.selected?'checked':''} ${row.unchanged?'disabled':''}><span><strong>${longDate(row.date,{month:'short',day:'numeric'})}</strong><span>${format(row[review.field])}</span><small>${row.unchanged?'Already matches — no change':row.previous===null?'New entry':`Replace ${format(row.previous)} only if selected`}</small></span></label>`).join('')}</div><p id="health-import-status" class="tiny" role="status">Existing entries start unselected.</p><p id="health-error" class="tiny danger" role="alert"></p><button class="text-button" id="health-reconnect" hidden>Reconnect Google</button><div class="dialog-actions"><button class="secondary" id="health-cancel-review">Cancel</button><button class="primary" id="health-save-sleep">Save selected days</button></div>`);
+    document.querySelectorAll('[data-health-row]').forEach(input=>input.onchange=()=>review.rows[Number(input.dataset.healthRow)].selected=input.checked);
+    $('health-cancel-review').onclick=()=>{$('editor').close();healthReview=null;};
+    $('health-reconnect').onclick=async()=>{try{await HealthConnection.connect();$('health-reconnect').hidden=true;$('health-error').textContent='Connected. Resume the import.';}catch(error){$('health-error').textContent=error.message;}};
+    $('health-save-sleep').onclick=saveSleepImport;
+  }
+  async function saveSleepImport() {
+    if(healthBusy||!healthReview||!healthPreferences[healthReview.kind])return;
+    const review=healthReview;
+    if(!review.tasks)review.tasks=review.rows.filter(row=>row.selected&&!row.unchanged).map(row=>({date:row.date,baseRevision:row.revision,mutationId:uid(),patch:{[review.field]:row[review.field]}}));
+    if(!review.tasks.length){$('health-error').textContent='Select at least one changed day.';review.tasks=null;return;}
+    healthBusy=true;
+    ['health-save-sleep','health-cancel-review','close-dialog'].forEach(id=>$(id).disabled=true);
+    document.querySelectorAll('[data-health-row]').forEach(input=>input.disabled=true);
+    $('health-error').textContent='';
+    try {
+      while(review.done<review.tasks.length) {
+        $('health-import-status').textContent=`Saving day ${review.done+1} of ${review.tasks.length}…`;
+        const result=await api('saveDay',review.tasks[review.done]);
+        if(result.conflict){putDay(result.day);review.conflict=true;throw new Error('A day changed elsewhere. Close this review and paste again to compare the latest entries. Completed saves are already in your log.');}
+        if(!result.ok)throw new Error('The save was not confirmed. Resume to check it safely.');
+        putDay(result.day);review.done++;
+      }
+      const count=review.done;healthReview=null;state.lastSaved=true;$('editor').close();render();toast(`${count} ${count===1?'day':'days'} saved`);
+    } catch(error) {
+      $('health-error').textContent=error.message;
+      $('health-import-status').textContent=`${review.done} of ${review.tasks.length} days confirmed saved.`;
+      $('health-save-sleep').textContent='Resume import';
+      if(error.signIn&&pages)$('health-reconnect').hidden=false;
+    } finally {
+      healthBusy=false;
+      if($('health-save-sleep')){
+        $('health-save-sleep').disabled=!!review.conflict;
+        $('health-cancel-review').disabled=false;$('close-dialog').disabled=false;
+      }
+    }
+  }
+  function reviewHealthWeight() {
+    if(!healthPreferences.weight)return;
+    try {
+      const date=$('health-weight-date').value, day=savedDay(date);
+      const payload=AppleHealthBridge.weightPayload(day,state.settings,state.today);
+      openDialog(dialogHead('Send weight')+`<p>${longDate(date,{weekday:'short',month:'long',day:'numeric'})}</p><p class="trend-metric">${C.formatWeight(day.weightKg,state.settings.unit)} <span class="metric-unit">${state.settings.unit}</span></p><p class="settings-intro">Open your Daily Health Weight Shortcut to add this home-scale reading to Apple Health. It must check for an existing weight first. The entry uses noon in your log timezone, or the current time if noon has not passed.</p><a id="health-run-weight" class="primary health-action health-guide-link" href="${escape(AppleHealthBridge.shortcutUrl('Daily Health Weight',payload))}">Open iPhone Shortcut</a><p class="tiny">Not set up yet? Follow the weight steps in <a href="https://health.theaubuchonfamily.com/apple-health-setup.html#weight" target="_blank" rel="noopener">iPhone setup</a>. The save is confirmed by Shortcuts, not this page.</p>`);
+    }catch(error){toast(error.message);}
+  }
   function workoutRating(day) {
     if (!C.hasWorkout(day)) return '';
     return `<div class="workout-grade"><h3 id="workout-grade-title">How was your workout?</h3><div class="rating-options" role="group" aria-labelledby="workout-grade-title">${C.WORKOUT_RATINGS.map(value=>`<button type="button" class="chip rating-choice" id="rating-${value}" data-rating="${value}" aria-pressed="${day.workoutRating===value}">${ratingLabels[value]}</button>`).join('')}</div><p class="tiny amount-help">One overall grade for the day. Optional; tap again to clear.</p></div>`;
@@ -170,9 +244,9 @@
   function renderWorkoutPatterns() {
     const {direction,factor}=patternState, result=C.workoutPatterns(state.days,state.today,direction,factor);
     const before=direction==='before';
-    const metric=before?'Average workout grade':factor==='sleep'?'Average sleep after workout':factor==='water'?'Following days with 50+ oz water':factor==='quality'?'Following days rated Healthy':factor==='alcohol'?'Following days with alcohol':`Following days with ${patternLabels[factor]}`;
+    const metric=before?'Average workout grade':factor==='sleep'?'Average sleep after workout':factor==='steps'?'Average steps after workout':factor==='water'?'Following days with 50+ oz water':factor==='quality'?'Following days rated Healthy':factor==='alcohol'?'Following days with alcohol':`Following days with ${patternLabels[factor]}`;
     const timing=before?(factor==='sleep'?'Uses the night ending on the workout date.':'Uses the calendar day before each workout.'):(factor==='sleep'?'Uses the night ending on the day after each workout.':'Uses the calendar day after each workout.');
-    const groups=result.groups.map(g=>`<div class="pattern-row"><div><strong>${before?escape(g.key):ratingLabels[g.key]+' workouts'}</strong><span class="tiny">${g.count} matched ${g.count===1?'day':'days'}</span></div><div class="pattern-value">${result.ready&&g.count>=result.minimum?(before?`${g.mean.toFixed(1)}<small> / 3</small>`:factor==='sleep'?`${formatSleep(g.mean*60)}`:`${Math.round(g.mean)}<small>%</small>`):'<span class="tiny">Keep logging</span>'}</div></div>`).join('');
+    const groups=result.groups.map(g=>`<div class="pattern-row"><div><strong>${before?escape(g.key):ratingLabels[g.key]+' workouts'}</strong><span class="tiny">${g.count} matched ${g.count===1?'day':'days'}</span></div><div class="pattern-value">${result.ready&&g.count>=result.minimum?(before?`${g.mean.toFixed(1)}<small> / 3</small>`:factor==='sleep'?`${formatSleep(g.mean*60)}`:factor==='steps'?`${Math.round(g.mean).toLocaleString()}<small> steps</small>`:`${Math.round(g.mean)}<small>%</small>`):'<span class="tiny">Keep logging</span>'}</div></div>`).join('');
     return `<section class="card wide" id="workout-patterns"><div class="row"><h2>Workouts & habits</h2><span class="tiny">Last 90 days</span></div><p class="outlook-note">${result.ratedCount} rated workout ${result.ratedCount===1?'day':'days'}. Explore what came before and what followed.</p><div class="pattern-directions" role="group" aria-label="Workout comparison timing">${['before','after'].map(value=>`<button class="chip" data-pattern-direction="${value}" aria-pressed="${direction===value}">${value==='before'?'Before workouts':'After workouts'}</button>`).join('')}</div><div class="field"><label for="pattern-factor">Compare with</label><select id="pattern-factor">${Object.entries(patternLabels).map(([key,label])=>`<option value="${key}" ${factor===key?'selected':''}>${label}</option>`).join('')}</select></div><h3>${escape(metric)}</h3><p class="tiny amount-help">${timing}</p>${groups||'<p class="outlook-note">Add workout grades and nearby habit entries to start a comparison.</p>'}<p class="outlook-note">${result.ready?'':`Comparisons appear with at least ${result.minimum} matched days in each of two groups. `}${before?'Grade scale: 1 = Poor, 2 = Average, 3 = Great. ':''}Missing entries are excluded. These are associations; other factors may matter.</p></section>`;
   }
   function amountButtons(key, values, day) {
@@ -191,7 +265,7 @@
     ${state.failure?`<div class="error-box" role="alert">${escape(state.failure.message)}${state.failure.signIn?'<p><button id="reconnect-google">Reconnect Google</button></p>':''}<button id="retry-save">${state.failure.retryable?'Retry save':'Continue editing'}</button></div>`:''}
     <div class="today-grid"><div><div class="summary-grid">
       <section class="card"><div class="card-heading"><span class="section-icon">${icon('weight')}</span><h2>Weight</h2></div><button id="edit-weight" class="metric-button" aria-label="${d.weightKg===null?'Enter':'Edit'} weight"><span class="metric-value ${d.weightKg===null?'metric-empty':''}">${d.weightKg===null?(d.weightStatus==='away'?'Away':'Add weight'):C.formatWeight(d.weightKg,state.settings.unit)}</span>${d.weightKg!==null?`<span class="metric-unit">${state.settings.unit}</span>`:''}</button><p class="metric-caption">${previous?`Last: ${C.formatWeight(previous.weightKg,state.settings.unit)} ${state.settings.unit}`:'Your home scale'}</p><button id="away" class="text-button">${d.weightStatus==='away'?'Clear away status':'Away from home scale'}</button></section>
-      <section class="card"><div class="card-heading"><span class="section-icon violet">${icon('moon')}</span><h2>Sleep</h2></div><button id="edit-sleep" class="metric-button" aria-label="${d.sleepMinutes===null?'Enter':'Edit'} sleep"><span class="metric-value ${d.sleepMinutes===null?'metric-empty':''}">${d.sleepMinutes===null?'Add sleep':formatSleep(d.sleepMinutes)}</span></button><p class="metric-caption">Night ending ${longDate(d.date,{month:'short',day:'numeric'})}</p><button id="sleep-shortcut" class="text-button">${d.sleepMinutes===null?'How long did you sleep?':'Edit duration'}</button></section>
+      <section class="card"><div class="card-heading"><span class="section-icon violet">${icon('moon')}</span><h2>Sleep</h2></div><button id="edit-sleep" class="metric-button" aria-label="${d.sleepMinutes===null?'Enter':'Edit'} sleep"><span class="metric-value ${d.sleepMinutes===null?'metric-empty':''}">${d.sleepMinutes===null?'Add sleep':formatSleep(d.sleepMinutes)}</span></button><p class="metric-caption">Night ending ${longDate(d.date,{month:'short',day:'numeric'})}</p><button id="sleep-shortcut" class="text-button">${d.sleepMinutes===null?'How long did you sleep?':'Edit duration'}</button></section><section class="card steps-card"><div class="card-heading"><span class="section-icon mint">${icon('cardio')}</span><h2>Steps</h2></div><button id="edit-steps" class="metric-button" aria-label="${d.steps===null?'Enter':'Edit'} steps"><span class="metric-value ${d.steps===null?'metric-empty':''}">${d.steps===null?'Add steps':d.steps.toLocaleString()}</span></button><p class="metric-caption">Apple Watch · daily total</p></section>
     </div><section class="card"><div class="card-heading"><span class="section-icon mint">${icon('lift')}</span><h2>Exercise</h2></div><div class="chips equal">${chip('lift','Lift Weights','lift',d)}${chip('cardio','Cardio','cardio',d)}${state.settings.sportEnabled?chip('sport','Sport','sport',d):''}</div><p class="tiny" style="margin-top:13px">Select anything you did ${past?'that day':'today'}.</p>${workoutRating(d)}</section></div>
     <section class="card food-card"><div class="card-heading"><span class="section-icon mint">${icon('leaf')}</span><h2>Food & habits</h2></div><p class="tiny" style="margin-bottom:13px">How was the day overall?</p><div class="quality">${['healthy','unhealthy'].map(v=>`<button id="quality-${v}" class="chip" data-quality="${v}" aria-pressed="${d.quality===v}">${icon('check','check')}<span>${v==='healthy'?'Healthy':'Unhealthy'}</span></button>`).join('')}</div>
       <div class="food-group"><h3>Food groups</h3><div class="chips equal">${chip('fruit','Fruit',null,d)}${chip('veggie','Veggie',null,d)}${chip('protein','Protein',null,d)}</div></div>
@@ -217,10 +291,13 @@
     const last=series[series.length-1];
     const sleeps=state.days.filter(d=>d.date<=state.today&&C.distance(d.date,state.today)<7&&d.sleepMinutes!==null);
     const sleepAverage=sleeps.length?sleeps.reduce((sum,d)=>sum+d.sleepMinutes,0)/sleeps.length:null;
+    const stepDays=state.days.filter(d=>d.date<=state.today&&C.distance(d.date,state.today)<7&&d.steps!=null);
+    const stepAverage=stepDays.length?Math.round(stepDays.reduce((sum,d)=>sum+d.steps,0)/stepDays.length):null;
     return heading('Your trends','A little perspective on your progress')+`<div class="trends-grid"><section class="card wide"><div class="row"><h2>This week</h2><span class="tiny">${state.settings.weightMode==='maintain'?'Maintaining':'Losing'} · ${state.settings.unit}</span></div><div class="week-dots">${week.dates.map(date=>`<div class="week-day"><span class="day-dot ${C.complete(savedDay(date))?'done':''} ${date===state.today?'today':''}">${C.complete(savedDay(date))?icon('check'):new Date(date+'T12:00:00Z').getUTCDate()}</span>${longDate(date,{weekday:'short'}).slice(0,3)}</div>`).join('')}</div><div class="stats"><div class="stat"><strong>${week.completed}<span> / ${week.elapsed}</span></strong><span>Days logged so far</span></div><div class="stat"><strong>${week.active}${state.settings.exerciseGoal?`<span> / ${state.settings.exerciseGoal}</span>`:''}</strong><span>Active days</span></div><div class="stat"><strong>${week.weighed}</strong><span>Weigh-ins</span></div></div></section>
     <section class="card wide"><div class="row"><h2>Weight</h2><span class="tiny">Last 90 days</span></div>${last?`<div class="trend-metric">${C.formatWeight(last.weight,state.settings.unit)} <span class="metric-unit">${state.settings.unit}</span></div><p class="tiny">Latest reading · ${longDate(last.date)}${last.average!==null?` · 7-day average ${C.formatWeight(last.average,state.settings.unit)} (${last.count} readings)`:''}</p>`:''}${chart(series)}${goalText()}</section>
     <section class="card"><h2>Weight outlook</h2>${prediction.ready?`<div class="trend-metric">${C.formatWeight(prediction.estimateKg,state.settings.unit)} <span class="metric-unit">${state.settings.unit}</span></div><p class="tiny">Next 7-day average · preliminary</p><p class="outlook-note">Recent-variability range: ${C.formatWeight(prediction.lowerKg,state.settings.unit)}–${C.formatWeight(prediction.upperKg,state.settings.unit)} ${state.settings.unit}.</p><p class="outlook-note">${prediction.detail} Data through ${longDate(prediction.dataThrough)}.</p>`:`<div class="empty" style="text-align:left;padding:24px 0 8px"><strong>${prediction.reason}</strong><p class="outlook-note">${prediction.detail}</p></div>`}</section>
     <section class="card"><h2>Daily consistency</h2><div class="streaks" style="margin-top:18px">${['fruit','veggie'].map(k=>{const s=C.streak(state.days,k,state.today);return `<div class="streak-card"><span>${k==='fruit'?'Fruit':'Veggie'}</span><strong>${s.count} <span>${s.count===1?'day':'days'}</span></strong><span>Current streak</span></div>`;}).join('')}</div><p class="outlook-note">Missing dates interrupt a verified streak. Today stays open until midnight.</p></section>
+    <section class="card wide"><div class="row"><h2>Watch steps</h2><span class="tiny">Last 7 days</span></div>${stepAverage===null?'<p class="outlook-note">Import or enter steps to see your daily average.</p>':`<div class="trend-metric">${stepAverage.toLocaleString()} <span class="metric-unit">steps / day</span></div><p class="outlook-note">Average across ${stepDays.length} logged ${stepDays.length===1?'day':'days'}. Missing days stay blank; today may be incomplete.</p>`}</section>
     ${renderWorkoutPatterns()}
     <section class="card wide"><div class="row"><h2>Sleep</h2><span class="tiny">Last 7 days</span></div>${sleepAverage===null?'<p class="outlook-note">Log your sleep to see your average here.</p>':`<div class="trend-metric">${formatSleep(sleepAverage)}</div><p class="outlook-note">Average across ${sleeps.length} logged ${sleeps.length===1?'night':'nights'}. Missing nights stay blank.</p>`}${state.settings.sleepGoalMinutes===null?'':`<p class="tiny">Your goal: ${formatSleep(state.settings.sleepGoalMinutes)}${sleeps.length?' · Met on '+sleeps.filter(d=>d.sleepMinutes>=state.settings.sleepGoalMinutes).length+' of '+sleeps.length+' logged nights':''}.</p>`}</section></div>`;
   }
@@ -234,18 +311,18 @@
     const month=state.historyMonth||state.today.slice(0,7), first=month+'-01';
     const last=new Date(Number(month.slice(0,4)),Number(month.slice(5,7)),0).getDate();
     const dates=Array.from({length:last},(_,i)=>month+'-'+String(i+1).padStart(2,'0')).filter(date=>date<=state.today).reverse();
-    return heading('History','Review, backfill, or change any day')+`<div class="card"><div class="row"><h2>Choose a day</h2><input id="history-month" type="month" value="${month}" max="${state.today.slice(0,7)}" aria-label="History month" style="max-width:180px;border:1px solid var(--line);border-radius:10px;padding:10px;background:var(--card);color:var(--text)"></div>${dates.map(date=>{const d=savedDay(date);const info=[d.weightKg!==null?C.formatWeight(d.weightKg,state.settings.unit)+' '+state.settings.unit:null,d.sleepMinutes!==null?formatSleep(d.sleepMinutes)+' sleep':null,d.quality,d.workoutRating?ratingLabels[d.workoutRating]+' workout':null].filter(Boolean);return `<button class="history-row" data-edit-date="${date}"><span><span class="history-date">${longDate(date,{weekday:'short',month:'short',day:'numeric'})}</span><span class="history-detail" style="display:block">${info.length?escape(info.join(' · ')):C.hasContent(d)?'Partially logged':'No entries yet'}</span></span><span class="history-status">${C.complete(d)?icon('check'):''}<span class="edit-link">${C.hasContent(d)?'Edit':'Add'}</span>${icon('chevron')}</span></button>`;}).join('')}</div>`;
+    return heading('History','Review, backfill, or change any day')+`<div class="card"><div class="row"><h2>Choose a day</h2><input id="history-month" type="month" value="${month}" max="${state.today.slice(0,7)}" aria-label="History month" style="max-width:180px;border:1px solid var(--line);border-radius:10px;padding:10px;background:var(--card);color:var(--text)"></div>${dates.map(date=>{const d=savedDay(date);const info=[d.weightKg!==null?C.formatWeight(d.weightKg,state.settings.unit)+' '+state.settings.unit:null,d.sleepMinutes!==null?formatSleep(d.sleepMinutes)+' sleep':null,d.steps!==null?d.steps.toLocaleString()+' steps':null,d.quality,d.workoutRating?ratingLabels[d.workoutRating]+' workout':null].filter(Boolean);return `<button class="history-row" data-edit-date="${date}"><span><span class="history-date">${longDate(date,{weekday:'short',month:'short',day:'numeric'})}</span><span class="history-detail" style="display:block">${info.length?escape(info.join(' · ')):C.hasContent(d)?'Partially logged':'No entries yet'}</span></span><span class="history-status">${C.complete(d)?icon('check'):''}<span class="edit-link">${C.hasContent(d)?'Edit':'Add'}</span>${icon('chevron')}</span></button>`;}).join('')}</div>`;
   }
   function renderSettings() {
     const s=state.settings, value=n=>n===null?'':C.asUnit(n,s.unit).toFixed(1);
     const account = pages ? '<section class="card settings-card"><div class="settings-row"><span>Google connection</span><button id="reconnect-google">Reconnect</button></div><div class="settings-row"><span>On this device</span><button id="disconnect-google">Sign out of this app</button></div><p class="tiny">Your Sheet stays private. Reconnect whenever Google asks.</p></section>' : '';
     return heading('Settings','Make this fit your routine')+account+`<form id="settings-form"><section class="card settings-card"><h2>Your preferences</h2><div class="field-pair"><div class="field"><label for="unit">Weight unit</label><select id="unit" name="unit"><option value="lb" ${s.unit==='lb'?'selected':''}>Pounds (lb)</option><option value="kg" ${s.unit==='kg'?'selected':''}>Kilograms (kg)</option></select></div><div class="field"><label for="weightMode">Current focus</label><select id="weightMode" name="weightMode"><option value="lose" ${s.weightMode==='lose'?'selected':''}>Losing weight</option><option value="maintain" ${s.weightMode==='maintain'?'selected':''}>Maintaining</option></select></div></div><p class="tiny">Changing your focus preserves your history.</p><div class="field"><label for="goalWeight">Optional target weight (${s.unit})</label><input type="number" step="0.1" min="0.1" id="goalWeight" name="goalWeight" value="${value(s.goalWeightKg)}" placeholder="No target"></div><div class="field-pair"><div class="field"><label for="rangeMin">Maintenance minimum (${s.unit})</label><input type="number" id="rangeMin" name="rangeMin" step="0.1" value="${value(s.rangeMinKg)}" placeholder="Optional"></div><div class="field"><label for="rangeMax">Maintenance maximum (${s.unit})</label><input type="number" id="rangeMax" name="rangeMax" step="0.1" value="${value(s.rangeMaxKg)}" placeholder="Optional"></div></div><h3 style="margin-top:22px">Sleep goal <span class="tiny">Optional</span></h3>${sleepInputs('sleep-goal',s.sleepGoalMinutes)}<p class="tiny">Leave both fields blank for no sleep goal.</p><div class="field-pair"><div class="field"><label for="exerciseGoal">Exercise days per week</label><input id="exerciseGoal" name="exerciseGoal" type="number" min="1" max="7" step="1" value="${s.exerciseGoal===null?'':s.exerciseGoal}" placeholder="Optional"></div></div><label class="switch-label" for="sportEnabled"><span>Show Sport button</span><input type="checkbox" id="sportEnabled" name="sportEnabled" ${s.sportEnabled?'checked':''}></label><div class="field"><label for="timezone">Timezone</label><input id="timezone" name="timezone" value="${escape(s.timezone)}" required></div><div class="field"><label for="weekStart">Week starts on</label><select id="weekStart" name="weekStart"><option value="1" ${s.weekStart===1?'selected':''}>Monday</option><option value="0" ${s.weekStart===0?'selected':''}>Sunday</option></select></div><p class="tiny">Your log keeps this timezone while traveling. Existing dates do not move.</p><div id="settings-error" class="error-box" hidden></div><button class="finish" id="save-settings" style="margin-top:22px">Save preferences</button></section></form>
-    <section class="card settings-card"><h2>Your data</h2><p class="settings-intro">${preview?'This preview stores entries only in this browser. Your Google Sheet is separate.':'Your entries are stored in your private Google Sheet.'}</p>${state.spreadsheetUrl?`<div class="settings-row"><span>Private data Sheet</span><a href="${escape(state.spreadsheetUrl)}" target="_blank" rel="noopener">Open Sheet ${icon('chevron')}</a></div>`:''}<div class="settings-row"><span>Full backup</span><button id="export-json">Export JSON ${icon('export')}</button></div><div class="settings-row"><span>For a spreadsheet</span><button id="export-csv">Export CSV ${icon('export')}</button></div><div class="settings-row"><span>Restore missing days</span><button id="restore">Import backup ${icon('chevron')}</button></div><p class="tiny" style="margin-top:15px">Imports add missing dates without overwriting existing entries. Keep occasional backups in private storage.</p></section><p class="tiny" style="text-align:center">Daily Health · Version 0.4.2</p>`;
+    <section class="card settings-card"><h2>Apple Health</h2><p class="settings-intro">Import sleep and Watch steps, and send saved weights using free iPhone Shortcuts.</p><button id="open-apple-health" class="full-button">Set up or run sync ${icon('chevron')}</button></section><section class="card settings-card"><h2>Your data</h2><p class="settings-intro">${preview?'This preview stores entries only in this browser. Your Google Sheet is separate.':'Your entries are stored in your private Google Sheet.'}</p>${state.spreadsheetUrl?`<div class="settings-row"><span>Private data Sheet</span><a href="${escape(state.spreadsheetUrl)}" target="_blank" rel="noopener">Open Sheet ${icon('chevron')}</a></div>`:''}<div class="settings-row"><span>Full backup</span><button id="export-json">Export JSON ${icon('export')}</button></div><div class="settings-row"><span>For a spreadsheet</span><button id="export-csv">Export CSV ${icon('export')}</button></div><div class="settings-row"><span>Restore missing days</span><button id="restore">Import backup ${icon('chevron')}</button></div><p class="tiny" style="margin-top:15px">Imports add missing dates without overwriting existing entries. Keep occasional backups in private storage.</p></section><p class="tiny" style="text-align:center">Daily Health · Version 0.5.0</p>`;
   }
   function render() {
     if(!state.loaded)return;
     const focused=document.activeElement?.id;
-    $('main').innerHTML=state.tab==='today'?renderToday():state.tab==='trends'?renderTrends():state.tab==='history'?renderHistory():renderSettings();
+    $('main').innerHTML=state.tab==='today'?renderToday():state.tab==='trends'?renderTrends():state.tab==='history'?renderHistory():state.tab==='health'?renderAppleHealth():renderSettings();
     document.querySelectorAll('[data-tab]').forEach(b=>{if(b.dataset.tab===state.tab)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');});
     bind();
     if(focused && $(focused)) $(focused).focus({preventScroll:true});
@@ -265,6 +342,13 @@
     }catch(error){$('metric-error').textContent=error.message;}};
   }
   function bind() {
+    if($('open-apple-health'))$('open-apple-health').onclick=()=>safeNavigate(()=>state.tab='health');
+    if($('health-back-settings'))$('health-back-settings').onclick=()=>safeNavigate(()=>state.tab='settings');
+    if($('health-import-sleep'))$('health-import-sleep').onclick=()=>openSleepImport('sleep');
+    if($('health-import-steps'))$('health-import-steps').onclick=()=>openSleepImport('steps');
+    if($('edit-steps'))$('edit-steps').onclick=editSteps;
+    if($('health-export-weight'))$('health-export-weight').onclick=reviewHealthWeight;
+    document.querySelectorAll('[data-health-direction]').forEach(input=>input.onchange=()=>{healthPreferences[input.dataset.healthDirection]=input.value==='on';try{localStorage.setItem(healthPreferencesKey,JSON.stringify(healthPreferences));}catch{toast('This browser could not remember your sync preferences.');}render();});
     document.querySelectorAll('[data-rating]').forEach(button=>button.onclick=()=>queueSave({workoutRating:visibleDay().workoutRating===button.dataset.rating?null:button.dataset.rating}));
     document.querySelectorAll('[data-pattern-direction]').forEach(button=>button.onclick=()=>{patternState.direction=button.dataset.patternDirection;render();});
     if($('pattern-factor'))$('pattern-factor').onchange=e=>{patternState.factor=e.target.value;render();};
@@ -277,7 +361,7 @@
       if(state.queue.length||state.busy){toast('Finish saving your pending entry before signing out.');return;}
       HealthConnection.disconnect();
       Object.assign(state,{settings:C.clone(C.DEFAULTS),days:[],selected:'',today:'',tab:'today',historyMonth:'',loaded:false,failure:null,lastSaved:false,spreadsheetUrl:'',import:null});
-      $('main').replaceChildren();$('dialog-content').replaceChildren();$('import-file').value='';$('toast').hidden=true;
+      healthReview=null;$('main').replaceChildren();$('dialog-content').replaceChildren();$('import-file').value='';$('toast').hidden=true;
       showConnection('Signed out of Daily Health. Connect Google to open your log.');
     };
     document.querySelectorAll('[data-habit]').forEach(b=>b.onclick=()=>{const day=visibleDay(),key=b.dataset.habit,done=C.EXERCISE.includes(key)?day.exerciseComplete:day.foodComplete;queueSave({[key]:day[key]===true?(done?false:null):true});});
@@ -312,6 +396,12 @@
     if($('export-csv'))$('export-csv').onclick=()=>downloadBackup('csv');
     if($('restore'))$('restore').onclick=()=>{$('import-file').value='';$('import-file').click();};
   }
+  function editSteps() {
+    const day=visibleDay();
+    openDialog(dialogHead('Daily steps')+`<p class="tiny">${longDate(day.date,{weekday:'long',month:'long',day:'numeric'})}</p><form id="steps-form"><div class="field"><label for="steps-value">Apple Watch steps</label><input class="big-input" id="steps-value" type="number" inputmode="numeric" min="0" max="200000" step="1" value="${day.steps===null?'':day.steps}" placeholder="Enter steps" required></div><p class="tiny">Use your Watch total for consistency with imported days.</p><p class="tiny danger" id="steps-error" role="alert"></p><div class="dialog-actions"><button type="button" id="clear-steps" class="secondary">Clear</button><button class="primary">Done</button></div></form>`);
+    $('clear-steps').onclick=()=>{queueSave({steps:null});$('editor').close();};
+    $('steps-form').onsubmit=e=>{e.preventDefault();try{const patch={steps:Number($('steps-value').value)};C.applyPatch(day,patch,state.settings,state.today);queueSave(patch);$('editor').close();}catch(error){$('steps-error').textContent=error.message;}};
+  }
   async function savePreferences(e) {
     e.preventDefault(); const form=e.target, f=new FormData(form), s=C.clone(state.settings), unit=f.get('unit');
     const number=name=>f.get(name)===''?null:Number(f.get(name));
@@ -343,10 +433,12 @@
   document.querySelectorAll('[data-icon]').forEach(el=>el.innerHTML=icon(el.dataset.icon));
   document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>safeNavigate(()=>{state.tab=b.dataset.tab;if(state.tab==='today')state.selected=state.today;if(state.tab==='trends'&&!preview)api('recordForecast').catch(()=>{});}));
   document.querySelector('.brand').onclick=e=>{e.preventDefault();safeNavigate(()=>{state.tab='today';state.selected=state.today;});};
-  window.addEventListener('beforeunload',e=>{if(state.queue.length){e.preventDefault();e.returnValue='';}});
+  window.addEventListener('beforeunload',e=>{if(state.queue.length||healthBusy){e.preventDefault();e.returnValue='';}});
   window.addEventListener('online',()=>{if(state.failure?.retryable)toast('Back online. Retry your pending save.');});
   window.addEventListener('offline',()=>toast('Offline. Reconnect before saving changes.'));
   document.addEventListener('visibilitychange',()=>{if(!document.hidden&&state.loaded){const next=C.today(state.settings.timezone);if(next!==state.today&&!state.queue.length){if(state.selected===state.today)state.selected=next;state.today=next;render();}}});
+  $('editor').addEventListener('cancel',e=>{if(healthBusy)e.preventDefault();});
+  $('editor').addEventListener('close',()=>{if(!$('editor').open&&!healthBusy){$('dialog-content').replaceChildren();healthReview=null;}});
   if(preview)$('preview-banner').hidden=false;
   if(pages){showConnection();$('connect-google').onclick=e=>connectGoogle(e.currentTarget);}
   else load();
