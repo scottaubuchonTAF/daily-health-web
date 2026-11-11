@@ -14,6 +14,14 @@
 .login-button{display:block;text-decoration:none;margin:24px 0 18px;text-align:center}
 .login-card .tiny{color:#6c7484}
 
+.amount-options{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.amount-options.water-options{grid-template-columns:repeat(4,minmax(0,1fr))}
+.amount-choice{flex-direction:column;gap:2px;padding:10px 4px;min-height:48px;min-width:0;font-size:14px}
+.amount-choice small{font-size:11px;color:var(--muted);font-weight:400}
+.amount-choice[aria-pressed=true] small{color:inherit}
+.amount-label{font-size:12px;color:var(--muted);margin:13px 0 8px}
+.amount-help{margin-top:9px;line-height:1.5}
+
 /* The static site starts locked until its owner connects Google. */
 .connection-screen{display:none;min-height:100dvh;place-items:center;padding:32px 22px;background:radial-gradient(ellipse at 20% 15%,#edf9f5,transparent 55%),var(--bg)}
 .connection-locked .connection-screen{display:grid}

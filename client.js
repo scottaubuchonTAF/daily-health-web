@@ -23,7 +23,11 @@
   const previewKey = 'daily-health-preview-v1';
   let toastTimer;
   const uid = () => (crypto.randomUUID ? crypto.randomUUID() : 'save-' + Date.now() + '-' + Math.random().toString(36).slice(2));
-  const readPreview = () => { try { return JSON.parse(localStorage.getItem(previewKey)) || { settings: C.clone(C.DEFAULTS), days: [], goals: [], forecasts: [] }; } catch { return { settings: C.clone(C.DEFAULTS), days: [], goals: [], forecasts: [] }; } };
+  const readPreview = () => { try {
+    const data = JSON.parse(localStorage.getItem(previewKey)) || { settings: C.clone(C.DEFAULTS), days: [], goals: [], forecasts: [] };
+    data.days = data.days.map(day => ({ ...C.blankDay(day.date), ...day }));
+    return data;
+  } catch { return { settings: C.clone(C.DEFAULTS), days: [], goals: [], forecasts: [] }; } };
   function storePreview(data) { localStorage.setItem(previewKey, JSON.stringify(data)); }
   async function previewApi(method, request) {
     const data = readPreview(), today = C.today(data.settings.timezone);
@@ -136,6 +140,14 @@
     return `<div class="page-heading"><div><h1>${title}</h1><p class="subtitle">${subtitle}</p></div><div class="save-state ${state.failure?'error':''}" role="status">${state.failure||saving||state.lastSaved?icon(state.failure?'clock':saving?'cloud':'check'):''}${state.failure?'Not saved':saving?'Saving…':state.lastSaved?'Saved':''}</div></div>`;
   }
   function chip(key, label, glyph, day) { return `<button id="habit-${key}" class="chip" data-habit="${key}" aria-pressed="${day[key]===true}">${icon('check','check')}${glyph?icon(glyph,'habit-icon'):''}<span>${label}</span></button>`; }
+  const waterLabels = { '0':'0', under50:'<50', '50to100':'50–100', over100:'>100' };
+  function amountButtons(key, values, day) {
+    const water = key === 'waterOzRange';
+    return `<div class="amount-options ${water?'water-options':''}" role="group" aria-label="${water?'Daily water in ounces':'Total alcoholic drinks for the day'}">${values.map(value => {
+      const label = water ? waterLabels[value] : value.replace('-', '–');
+      return `<button type="button" class="chip amount-choice" id="amount-${key}-${value}" data-amount="${key}" data-value="${value}" aria-pressed="${day[key]===value}" aria-label="${escape(label)} ${water?'ounces of water':'drinks'}"><span>${escape(label)}</span>${water?'<small>oz</small>':''}</button>`;
+    }).join('')}</div>`;
+  }
   function renderToday() {
     const d = visibleDay(), past = state.selected !== state.today;
     const previous = state.days.filter(x => x.date < d.date && x.weightKg !== null).sort((a,b)=>b.date.localeCompare(a.date))[0];
@@ -149,11 +161,12 @@
     </div><section class="card"><div class="card-heading"><span class="section-icon mint">${icon('lift')}</span><h2>Exercise</h2></div><div class="chips equal">${chip('lift','Lift Weights','lift',d)}${chip('cardio','Cardio','cardio',d)}${state.settings.sportEnabled?chip('sport','Sport','sport',d):''}</div><p class="tiny" style="margin-top:13px">Select anything you did ${past?'that day':'today'}.</p></section></div>
     <section class="card food-card"><div class="card-heading"><span class="section-icon mint">${icon('leaf')}</span><h2>Food & habits</h2></div><p class="tiny" style="margin-bottom:13px">How was the day overall?</p><div class="quality">${['healthy','unhealthy'].map(v=>`<button id="quality-${v}" class="chip" data-quality="${v}" aria-pressed="${d.quality===v}">${icon('check','check')}<span>${v==='healthy'?'Healthy':'Unhealthy'}</span></button>`).join('')}</div>
       <div class="food-group"><h3>Food groups</h3><div class="chips equal">${chip('fruit','Fruit',null,d)}${chip('veggie','Veggie',null,d)}${chip('protein','Protein',null,d)}</div></div>
-      <div class="food-group"><h3>Alcohol</h3><div class="chips equal">${chip('beer','Beer',null,d)}${chip('margarita','Margarita',null,d)}</div></div>
+      <div class="food-group"><h3>Alcohol</h3><div class="chips equal">${chip('beer','Beer',null,d)}${chip('margarita','Margarita',null,d)}</div><p class="amount-label">Total drinks for the day</p>${amountButtons('alcoholDrinks',C.DRINK_RANGES,d)}</div>
+      <div class="food-group"><h3>Water</h3>${amountButtons('waterOzRange',C.WATER_RANGES,d)}<p class="tiny amount-help">Daily total. Tap a selected amount again to clear it.</p></div>
       <div class="food-group"><h3>Unhealthy snacks</h3><div class="chips equal">${chip('chipsPretzels','Chips/Pretzels',null,d)}${chip('sweets','Sweets',null,d)}</div></div>
       <div class="food-group"><h3>Eating out</h3><div class="chips equal">${chip('ateOut','Ate out','food',d)}</div></div>
       <div class="divider"></div><div class="row"><div><h2 style="font-size:16px">Zyn</h2><p class="tiny">Did you use it ${past?'that day':'today'}?</p></div><div class="segmented" aria-label="Zyn use"><button id="zyn-yes" data-zyn="true" aria-pressed="${d.zyn===true}">Yes</button><button id="zyn-no" data-zyn="false" aria-pressed="${d.zyn===false}">No</button></div></div>
-    </section><div class="daily-footer"><button id="finish-day" class="finish ${C.complete(d)?'completed':''}" ${C.complete(d)?'disabled':''}>${C.complete(d)?icon('check'):''}<span>${C.complete(d)?'Log complete':past?"Finish this day’s log":"Finish today’s log"}</span></button><p class="finish-note">${C.complete(d)?'You can still edit any entry.':'Confirms unselected habits as “No.” Weight and sleep can stay blank.'}</p>${C.hasContent(savedDay(d.date))?'<button id="delete-day" class="text-button danger" style="display:block;margin:18px auto 0">Delete this day’s entries</button>':''}</div></div>`;
+    </section><div class="daily-footer"><button id="finish-day" class="finish ${C.complete(d)?'completed':''}" ${C.complete(d)?'disabled':''}>${C.complete(d)?icon('check'):''}<span>${C.complete(d)?'Log complete':past?"Finish this day’s log":"Finish today’s log"}</span></button><p class="finish-note">${C.complete(d)?'You can still edit any entry.':'Confirms unselected habits as “No.” Weight, sleep, and drink amounts can stay blank.'}</p>${C.hasContent(savedDay(d.date))?'<button id="delete-day" class="text-button danger" style="display:block;margin:18px auto 0">Delete this day’s entries</button>':''}</div></div>`;
   }
   function chart(series) {
     if (!series.length) return `<div class="empty">${icon('trends')}Your weight chart starts with your first weigh-in.</div>`;
@@ -192,7 +205,7 @@
     const s=state.settings, value=n=>n===null?'':C.asUnit(n,s.unit).toFixed(1);
     const account = pages ? '<section class="card settings-card"><div class="settings-row"><span>Google connection</span><button id="reconnect-google">Reconnect</button></div><div class="settings-row"><span>On this device</span><button id="disconnect-google">Sign out of this app</button></div><p class="tiny">Your Sheet stays private. Reconnect whenever Google asks.</p></section>' : '';
     return heading('Settings','Make this fit your routine')+account+`<form id="settings-form"><section class="card settings-card"><h2>Your preferences</h2><div class="field-pair"><div class="field"><label for="unit">Weight unit</label><select id="unit" name="unit"><option value="lb" ${s.unit==='lb'?'selected':''}>Pounds (lb)</option><option value="kg" ${s.unit==='kg'?'selected':''}>Kilograms (kg)</option></select></div><div class="field"><label for="weightMode">Current focus</label><select id="weightMode" name="weightMode"><option value="lose" ${s.weightMode==='lose'?'selected':''}>Losing weight</option><option value="maintain" ${s.weightMode==='maintain'?'selected':''}>Maintaining</option></select></div></div><p class="tiny">Changing your focus preserves your history.</p><div class="field"><label for="goalWeight">Optional target weight (${s.unit})</label><input type="number" step="0.1" min="0.1" id="goalWeight" name="goalWeight" value="${value(s.goalWeightKg)}" placeholder="No target"></div><div class="field-pair"><div class="field"><label for="rangeMin">Maintenance minimum (${s.unit})</label><input type="number" id="rangeMin" name="rangeMin" step="0.1" value="${value(s.rangeMinKg)}" placeholder="Optional"></div><div class="field"><label for="rangeMax">Maintenance maximum (${s.unit})</label><input type="number" id="rangeMax" name="rangeMax" step="0.1" value="${value(s.rangeMaxKg)}" placeholder="Optional"></div></div><div class="field-pair"><div class="field"><label for="sleepGoal">Sleep goal (hours)</label><input id="sleepGoal" name="sleepGoal" type="number" min="0.25" max="24" step="0.25" value="${s.sleepGoalMinutes===null?'':s.sleepGoalMinutes/60}" placeholder="Optional"></div><div class="field"><label for="exerciseGoal">Exercise days per week</label><input id="exerciseGoal" name="exerciseGoal" type="number" min="1" max="7" step="1" value="${s.exerciseGoal===null?'':s.exerciseGoal}" placeholder="Optional"></div></div><label class="switch-label" for="sportEnabled"><span>Show Sport button</span><input type="checkbox" id="sportEnabled" name="sportEnabled" ${s.sportEnabled?'checked':''}></label><div class="field"><label for="timezone">Timezone</label><input id="timezone" name="timezone" value="${escape(s.timezone)}" required></div><div class="field"><label for="weekStart">Week starts on</label><select id="weekStart" name="weekStart"><option value="1" ${s.weekStart===1?'selected':''}>Monday</option><option value="0" ${s.weekStart===0?'selected':''}>Sunday</option></select></div><p class="tiny">Your log keeps this timezone while traveling. Existing dates do not move.</p><div id="settings-error" class="error-box" hidden></div><button class="finish" id="save-settings" style="margin-top:22px">Save preferences</button></section></form>
-    <section class="card settings-card"><h2>Your data</h2><p class="settings-intro">${preview?'This preview stores entries only in this browser. Your Google Sheet is separate.':'Your entries are stored in your private Google Sheet.'}</p>${state.spreadsheetUrl?`<div class="settings-row"><span>Private data Sheet</span><a href="${escape(state.spreadsheetUrl)}" target="_blank" rel="noopener">Open Sheet ${icon('chevron')}</a></div>`:''}<div class="settings-row"><span>Full backup</span><button id="export-json">Export JSON ${icon('export')}</button></div><div class="settings-row"><span>For a spreadsheet</span><button id="export-csv">Export CSV ${icon('export')}</button></div><div class="settings-row"><span>Restore missing days</span><button id="restore">Import backup ${icon('chevron')}</button></div><p class="tiny" style="margin-top:15px">Imports add missing dates without overwriting existing entries. Keep occasional backups in private storage.</p></section><p class="tiny" style="text-align:center">Daily Health · Version 0.2</p>`;
+    <section class="card settings-card"><h2>Your data</h2><p class="settings-intro">${preview?'This preview stores entries only in this browser. Your Google Sheet is separate.':'Your entries are stored in your private Google Sheet.'}</p>${state.spreadsheetUrl?`<div class="settings-row"><span>Private data Sheet</span><a href="${escape(state.spreadsheetUrl)}" target="_blank" rel="noopener">Open Sheet ${icon('chevron')}</a></div>`:''}<div class="settings-row"><span>Full backup</span><button id="export-json">Export JSON ${icon('export')}</button></div><div class="settings-row"><span>For a spreadsheet</span><button id="export-csv">Export CSV ${icon('export')}</button></div><div class="settings-row"><span>Restore missing days</span><button id="restore">Import backup ${icon('chevron')}</button></div><p class="tiny" style="margin-top:15px">Imports add missing dates without overwriting existing entries. Keep occasional backups in private storage.</p></section><p class="tiny" style="text-align:center">Daily Health · Version 0.3</p>`;
   }
   function render() {
     if(!state.loaded)return;
@@ -217,6 +230,10 @@
     }catch(error){$('metric-error').textContent=error.message;}};
   }
   function bind() {
+    document.querySelectorAll('[data-amount]').forEach(button=>button.onclick=()=>{
+      const key=button.dataset.amount, value=button.dataset.value;
+      queueSave({[key]:visibleDay()[key]===value?null:value});
+    });
     if($('reconnect-google'))$('reconnect-google').onclick=e=>connectGoogle(e.currentTarget);
     if($('disconnect-google'))$('disconnect-google').onclick=()=>{
       if(state.queue.length||state.busy){toast('Finish saving your pending entry before signing out.');return;}
@@ -281,7 +298,7 @@
     }catch(error){toast(error.message);}
   };
   async function load() {
-    try{const data=await api('getBootstrap');state.settings=C.validateSettings(data.settings);state.days=data.days;state.today=data.today;state.selected=state.selected||state.today;state.spreadsheetUrl=data.spreadsheetUrl;state.loaded=true;document.body.classList.remove('connection-locked');render();}
+    try{const data=await api('getBootstrap');state.settings=C.validateSettings(data.settings);state.days=data.days.map(day=>({...C.blankDay(day.date),...day}));state.today=data.today;state.selected=state.selected||state.today;state.spreadsheetUrl=data.spreadsheetUrl;state.loaded=true;document.body.classList.remove('connection-locked');render();}
     catch(error){if(pages&&!state.loaded){showConnection(error.message);return;}$('main').innerHTML=`<div class="card"><h2>Couldn’t open your log</h2><p class="settings-intro">${escape(error.message)}</p><button id="reload" class="finish">Try again</button></div>`;$('reload').onclick=load;}
   }
   $('open-settings').innerHTML=icon('settings');$('open-settings').onclick=()=>safeNavigate(()=>state.tab=state.tab==='settings'?'today':'settings');

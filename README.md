@@ -2,6 +2,8 @@
 
 Public static interface for a personal daily habit tracker. Hosted with GitHub Pages at https://health.theaubuchonfamily.com.
 
+Daily selections include total alcoholic drinks (1–3, 4–6, 7+) alongside Beer/Margarita types, and water (0, under 50 oz, 50–100 oz, over 100 oz). Amounts are optional, clearable, and editable on previous days. The matching backend must support schema v2; existing records retain blank amounts.
+
 The Google Sheet and Apps Script backend are private and are not included in this repository. Reading or saving entries requires Google authorization and the backend owner's account. Public code alone provides no access to the data.
 
 ## Hosting
