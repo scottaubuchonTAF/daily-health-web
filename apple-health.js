@@ -19,8 +19,9 @@
   }
   function stage(value) {
     const name = String(value).toLowerCase().replace(/hkcategoryvaluesleepanalysis|[^a-z0-9]/g, '');
-    if (['1','3','4','5','asleep','asleepunspecified','asleepcore','asleepdeep','asleeprem','core','deep','rem'].includes(name)) return true;
-    if (['0','2','inbed','awake'].includes(name)) return false;
+    if (['3','4','5','asleepcore','asleepdeep','asleeprem','core','deep','rem'].includes(name)) return {asleep:true,detailed:true,awake:false};
+    if (['1','asleep','asleepunspecified'].includes(name)) return {asleep:true,detailed:false,awake:false};
+    if (['0','2','inbed','awake'].includes(name)) return {asleep:false,detailed:false,awake:['2','awake'].includes(name)};
     throw new Error('A sleep stage was not recognized. Use the Health sample’s Value in the Shortcut, not its name or duration.');
   }
   function unionMinutes(intervals) {
@@ -34,7 +35,7 @@
     if (start!==null) total+=end-start;
     return total / 60000;
   }
-  function parseSleep(text, timezone, today, now=Date.now()) {
+  function parseSleep(text, timezone, today, now=Date.now(), options={}) {
     assert(typeof text==='string' && text.length<=2000000, 'Choose at most 2 MB of sleep data.');
     const lines=text.replace(/^\uFEFF/,'').trim().split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
     assert(lines.shift()===HEADER, 'Paste the result from your Daily Health Sleep Shortcut.');
@@ -46,11 +47,19 @@
       const start=timestamp(startText),end=timestamp(endText);
       assert(end>start && end-start<=86400000, 'A sleep segment has an invalid duration.');
       assert(end<=now+60000, 'A sleep segment ends in the future.');
-      return { start,end,asleep:stage(value),source };
+      return { start,end,...stage(value),source };
     });
+    const inputSampleCount=rows.length;
     const watchRows=rows.filter(r=>/watch/i.test(r.source));
     const usedWatch=watchRows.length>0;
     if(usedWatch) rows=watchRows;
+    else if(options.automatic) {
+      // Shortcuts can return a blank Source for genuine Health samples. Accept
+      // detailed stages without claiming a device identity. Broad Asleep/In Bed
+      // records and identified non-Watch sources cannot inflate these totals.
+      rows=rows.filter(r=>r.source==='' && (r.detailed || r.awake));
+    }
+    const sourceMode=usedWatch?'watch':options.automatic?(rows.some(r=>r.detailed)?'unavailable':'none'):'other';
     rows.sort((a,b)=>a.start-b.start || a.end-b.end);
     // Awake/in-bed intervals connect the night's stages but never count as sleep.
     // Exact and overlapping samples are merged before totaling each session.
@@ -72,7 +81,7 @@
     const days=[...totals].map(([date,minutes])=>({date,sleepMinutes:Math.round(minutes)})).sort((a,b)=>b.date.localeCompare(a.date));
     days.forEach(day=>assert(day.sleepMinutes>0 && day.sleepMinutes<=1440,'A day has more than 24 hours of sleep. Check the date range and sources.'));
     assert(days.length<=90,'Import at most 90 days at once.');
-    return {days,usedWatch,sampleCount:rows.length};
+    return {days,usedWatch,sourceMode,inputSampleCount,sampleCount:rows.length};
   }
   function samplePlan(imported, existing, field) {
     assert(['sleepMinutes','steps'].includes(field),'Unsupported import field.');
