@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#f4f6fa">
+  <meta name="apple-mobile-web-app-title" content="Daily Health">
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="/assets/icon-192.png">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <title>Daily Health</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body data-mode="pages" class="connection-locked">
+  <section class="connection-screen" aria-labelledby="connection-title"><div class="login-card">
+  <img src="/apple-touch-icon.png" class="login-icon" width="96" height="96" alt="">
+  <p class="login-eyebrow">A LITTLE, EVERY DAY</p><h1 id="connection-title">Daily Health</h1>
+  <p class="login-intro">Small habits.<br>A clearer picture.</p>
+  <button id="connect-google" class="finish" type="button">Connect Google</button>
+  <p id="connection-message" class="connection-message" role="status">Opening your connection…</p>
+  <p class="tiny">Your daily log stays in your private Google Sheet.</p>
+  <a class="privacy-link" href="/privacy.html">Privacy</a>
+  <noscript><p>Please enable JavaScript to open your daily log.</p></noscript>
+  </div></section>
+  <div id="preview-banner" class="preview-banner" hidden>Preview · entries stay in this browser, separate from your Google Sheet</div>
+  <div class="app-shell">
+    <header class="app-header">
+      <a class="brand" href="#today" aria-label="Daily Health home"><span class="app-mark"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x2="1" y2="1"><stop stop-color="#347efa"/><stop offset="1" stop-color="#1647b8"/></linearGradient>
+    <linearGradient id="mint" x2=".6" y2="1"><stop stop-color="#b3f6dc"/><stop offset="1" stop-color="#70dfbb"/></linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="116" fill="url(#bg)"/>
+  <path d="M0 147C130 38 353 35 512 125V0H0Z" fill="#fff" opacity=".05"/>
+  <rect x="105" y="105" width="137" height="137" rx="44" fill="#fff"/>
+  <rect x="270" y="105" width="137" height="137" rx="44" fill="#fff" opacity=".32"/>
+  <rect x="105" y="270" width="137" height="137" rx="44" fill="#fff" opacity=".32"/>
+  <rect x="270" y="270" width="137" height="137" rx="44" fill="url(#mint)"/>
+  <path d="m305 338 22 23 47-49" fill="none" stroke="#154b91" stroke-width="17" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="174" cy="174" r="17" fill="#2b6ee9"/>
+</svg>
+</span><span>Daily Health</span></a>
+      <button class="icon-button" id="open-settings" aria-label="Open settings"></button>
+    </header>
+    <main id="main" aria-live="off"><div class="loading"><span class="spinner"></span><p>Opening your daily log…</p></div></main>
+  </div>
+  <nav class="tabbar" aria-label="Main navigation">
+    <button data-tab="today" aria-current="page"><span class="nav-icon" data-icon="today"></span><span>Today</span></button>
+    <button data-tab="trends"><span class="nav-icon" data-icon="trends"></span><span>Trends</span></button>
+    <button data-tab="history"><span class="nav-icon" data-icon="history"></span><span>History</span></button>
+  </nav>
+  <div id="toast" class="toast" role="status" hidden></div>
+  <dialog id="editor"><div id="dialog-content"></div></dialog>
+  <input type="file" id="import-file" accept="application/json,.json" hidden>
+  <script src="/core.js"></script>
+  <script src="/config.js"></script>
+  <script src="/pages-api.js"></script>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script src="/client.js"></script>
+</body>
+</html>
