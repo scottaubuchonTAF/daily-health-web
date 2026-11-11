@@ -62,3 +62,5 @@
 #notes-count{white-space:nowrap;margin-left:12px}
 
 .remember-device{display:flex;align-items:center;justify-content:center;gap:10px;font-size:14px;line-height:1.5;margin:18px 0 8px}.remember-device input{width:20px;height:20px;accent-color:var(--blue);flex-shrink:0}
+
+.fasting-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.fasting-options button:first-child{grid-column:1/-1}
