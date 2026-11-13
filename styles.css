@@ -53,6 +53,9 @@
 .health-manual { margin:20px 0; }
 .health-manual > summary { min-height:44px; cursor:pointer; color:var(--muted,#52657c); padding:12px 4px; }
 #health-sync-url, #health-sync-key { display:block; width:100%; margin:8px 0; }
+.passkey-unlock{margin-bottom:14px;font-size:15px}
+.connection-screen [hidden],.dialog-actions [hidden]{display:none!important}
+.connection-locked .toast{display:none}
 #health-copy-url, #health-copy-key { margin-bottom:18px; }
 .notes-card{grid-column:1/-1}
 .notes-text{white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px;line-height:1.6;margin:4px 0 12px}
@@ -64,7 +67,6 @@
 .remember-device{display:flex;align-items:center;justify-content:center;gap:10px;font-size:14px;line-height:1.5;margin:18px 0 8px}.remember-device input{width:20px;height:20px;accent-color:var(--blue);flex-shrink:0}
 
 .fasting-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.fasting-options button:first-child{grid-column:1/-1}
-
 
 /* Keep logout visible on every signed-in screen, including narrow phones. */
 .header-actions{display:flex;align-items:center;gap:8px;flex-shrink:0}

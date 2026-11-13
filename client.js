@@ -41,6 +41,7 @@
   const pages = document.body.dataset.mode === 'pages';
   const previewKey = 'daily-health-preview-v1';
   let connectionGeneration=0;
+  let privacyLocked=false, resumeDialog=false, authenticationBusy=false;
   let previewHealthConnection={revision:0,paired:false,sleep:false,steps:false,endpoint:'https://example.invalid/daily-health-sync',results:{}};
   let toastTimer;
   const uid = () => (crypto.randomUUID ? crypto.randomUUID() : 'save-' + Date.now() + '-' + Math.random().toString(36).slice(2));
@@ -93,6 +94,7 @@
     throw new Error('Unknown preview action.');
   }
   function api(method, request) {
+    if(privacyLocked){const error=new Error('Your log is locked. Unlock to continue.');error.signIn=true;return Promise.reject(error);}
     if (!navigator.onLine) return Promise.reject(new Error('You are offline. Reconnect, then retry your save.'));
     if (preview) return previewApi(method, request);
     if (pages) return HealthConnection.call(method, request);
@@ -110,19 +112,75 @@
       : 'Your Google connection is being set up. Check back shortly.');
     $('connect-google').disabled = !HealthConnection.ready();
     $('connect-google').textContent = HealthConnection.rememberedUntil() ? 'Try again' : 'Connect Google';
+    const protectedDevice=HealthConnection.passkeyEnabled();
+    $('unlock-passkey').hidden=!HealthConnection.supportsPasskey();
+    $('unlock-passkey').disabled=false;
+    $('remember-device').closest('label').hidden=protectedDevice;
+    if(protectedDevice)$('remember-device').checked=false;
+    $('connection-help').textContent=protectedDevice?'Unlock with your passkey. Google sign-in is available for recovery.':'Set up Face ID / passkey in Settings after connecting Google.';
   }
   async function connectGoogle(button) {
-    button.disabled = true;
+    button.disabled = true;authenticationBusy=true;
     try {
       if(button.id==='connect-google'&&HealthConnection.rememberedUntil()){await load();return;}
       const connection=await HealthConnection.connect({remember:button.id!=='connect-google'||$('remember-device')?.checked!==false});
-      if (!state.loaded) await load();
+      if(privacyLocked)await resumePrivatePage();
+      else if (!state.loaded) await load();
       else { toast('Google connected. You can retry your save.'); render(); }
       if(connection.warning)toast(connection.warning);
     } catch (error) {
       if (!state.loaded) showConnection(error.message);
       else toast(error.message);
-    } finally { button.disabled = false; }
+    } finally { button.disabled = false;authenticationBusy=false; }
+  }
+  function lockPrivatePage() {
+    if(!pages||!state.loaded||privacyLocked||authenticationBusy||HealthConnection.passkeyBusy()||!HealthConnection.passkeyEnabled())return;
+    privacyLocked=true;resumeDialog=$('editor').open;
+    HealthConnection.lock();
+    if(resumeDialog)$('editor').close();
+    $('toast').hidden=true;
+    showConnection('Your log is locked. Unlock to continue. Pending changes stay here until you close this page.');
+  }
+  async function resumePrivatePage() {
+    privacyLocked=false;
+    if(!state.loaded){await load();return;}
+    document.body.classList.remove('connection-locked');render();
+    if(resumeDialog&&$('dialog-content').childNodes.length){$('editor').showModal();resumeDialog=false;}
+    if(state.failure?.signIn)state.failure=null;
+    if(state.queue.length)pump();
+  }
+  async function unlockWithPasskey() {
+    const button=$('unlock-passkey');button.disabled=true;authenticationBusy=true;
+    $('connect-google').disabled=true;$('connection-message').textContent='Confirm your passkey on your device…';
+    try{await HealthConnection.unlockPasskey();await resumePrivatePage();}
+    catch(error){showConnection(error.message);}
+    finally{authenticationBusy=false;button.disabled=false;$('connect-google').disabled=false;}
+  }
+  function setupPasskey() {
+    if(state.queue.length||state.busy||healthBusy){toast('Finish your pending save first.');return;}
+    openDialog(dialogHead('Set up Face ID / passkey')+'<p>Confirm your Google account, then create a passkey on this device. On iPhone, Face ID or your device passcode unlocks your log. The app locks when you leave it.</p><p id="passkey-error" class="tiny danger" role="alert"></p><div class="dialog-actions"><button class="primary" id="prepare-passkey">Confirm with Google</button><button class="primary" id="create-passkey" hidden>Create passkey</button></div>');
+    $('prepare-passkey').onclick=async e=>{
+      e.currentTarget.disabled=true;authenticationBusy=true;
+      try{await HealthConnection.preparePasskey();$('prepare-passkey').hidden=true;$('create-passkey').hidden=false;}
+      catch(error){$('passkey-error').textContent=error.message;$('prepare-passkey').disabled=false;}
+      finally{authenticationBusy=false;}
+    };
+    $('create-passkey').onclick=async e=>{
+      e.currentTarget.disabled=true;authenticationBusy=true;
+      try{await HealthConnection.createPasskey();clearSignedInPage('Passkey ready. Unlock with Face ID / passkey to open your log.');}
+      catch(error){$('passkey-error').textContent=error.message;$('create-passkey').hidden=true;$('prepare-passkey').hidden=false;$('prepare-passkey').disabled=false;}
+      finally{authenticationBusy=false;}
+    };
+  }
+  function removePasskeys() {
+    if(state.queue.length||state.busy||healthBusy){toast('Finish your pending save first.');return;}
+    openDialog(dialogHead('Remove all passkeys?')+'<p>This revokes every Daily Health passkey and its active visits. Connect Google to access your log afterward. You can also delete the old passkey from your device’s Passwords app.</p><p id="passkey-error" class="tiny danger" role="alert"></p><div class="dialog-actions"><button class="primary" id="remove-passkeys-confirm">Confirm with Google</button></div>');
+    $('remove-passkeys-confirm').onclick=async e=>{
+      e.currentTarget.disabled=true;authenticationBusy=true;
+      try{await HealthConnection.removePasskeys();clearSignedInPage('Passkeys removed. Connect Google to continue.');}
+      catch(error){$('passkey-error').textContent=error.message;$('remove-passkeys-confirm').disabled=false;}
+      finally{authenticationBusy=false;}
+    };
   }
   async function logOut() {
     if(!pages||!state.loaded)return;
@@ -133,7 +191,7 @@
   }
   function clearSignedInPage(message) {
     $('log-out').hidden=true;
-    connectionGeneration++;
+    connectionGeneration++;privacyLocked=false;resumeDialog=false;
     Object.assign(state,{settings:C.clone(C.DEFAULTS),days:[],selected:'',today:'',tab:'today',historyMonth:'',loaded:false,queue:[],busy:false,failure:null,lastSaved:false,spreadsheetUrl:'',import:null});
     healthReview=null;healthConnection=null;$('main').replaceChildren();$('editor').close();$('dialog-content').replaceChildren();$('import-file').value='';$('toast').hidden=true;
     showConnection(message||'Signed out of Daily Health. Connect Google to open your log.');
@@ -163,10 +221,10 @@
     }
   }
   async function pump() {
-    if (state.busy || state.failure || !state.queue.length) return;
+    if (privacyLocked || state.busy || state.failure || !state.queue.length) return;
     state.busy = true;
     const generation=connectionGeneration;
-    while (state.queue.length && !state.failure) {
+    while (state.queue.length && !state.failure && !privacyLocked) {
       const task = state.queue[0];
       if (!task.request) task.request = { ...task, baseRevision: savedDay(task.date).revision };
       try {
@@ -284,7 +342,7 @@
     openDialog(dialogHead(steps?'Review Watch steps':'Review sleep')+`<p class="settings-intro">${steps?'Watch samples only; iPhone counts are excluded. Today’s count may be incomplete.':'Awake time is excluded and overlapping samples count once. Nights use the date the sleep session ended.'} ${review.usedWatch?'Using Apple Watch samples.':'No Apple Watch source label was found; check these totals carefully.'} Check the oldest day in case the date range cuts it short.</p><div class="health-review-list">${review.rows.map((row,i)=>`<label class="health-review-row"><input type="checkbox" data-health-row="${i}" ${row.selected?'checked':''} ${row.unchanged?'disabled':''}><span><strong>${longDate(row.date,{month:'short',day:'numeric'})}</strong><span>${format(row[review.field])}</span><small>${row.unchanged?'Already matches — no change':row.previous===null?'New entry':`Replace ${format(row.previous)} only if selected`}</small></span></label>`).join('')}</div><p id="health-import-status" class="tiny" role="status">Existing entries start unselected.</p><p id="health-error" class="tiny danger" role="alert"></p><button class="text-button" id="health-reconnect" hidden>Reconnect Google</button><div class="dialog-actions"><button class="secondary" id="health-cancel-review">Cancel</button><button class="primary" id="health-save-sleep">Save selected days</button></div>`);
     document.querySelectorAll('[data-health-row]').forEach(input=>input.onchange=()=>review.rows[Number(input.dataset.healthRow)].selected=input.checked);
     $('health-cancel-review').onclick=()=>{$('editor').close();healthReview=null;};
-    $('health-reconnect').onclick=async()=>{try{await HealthConnection.connect();$('health-reconnect').hidden=true;$('health-error').textContent='Connected. Resume the import.';}catch(error){$('health-error').textContent=error.message;}};
+    $('health-reconnect').onclick=async()=>{authenticationBusy=true;try{await HealthConnection.connect();$('health-reconnect').hidden=true;$('health-error').textContent='Connected. Resume the import.';}catch(error){$('health-error').textContent=error.message;}finally{authenticationBusy=false;}};
     $('health-save-sleep').onclick=saveSleepImport;
   }
   async function saveSleepImport() {
@@ -406,19 +464,20 @@
   function renderSettings() {
     const s=state.settings, value=n=>n===null?'':C.asUnit(n,s.unit).toFixed(1);
     const remembered=pages&&HealthConnection.rememberedUntil();
-    const account = pages ? `<section class="card settings-card"><h2>Your connection</h2><p class="settings-intro">${remembered?'This device is remembered until '+new Date(remembered).toLocaleDateString()+'. Open the app anytime to continue.':'Signed in for this visit. Remember this device to skip sign-in next time.'}</p>${remembered?'':'<button class="secondary" id="reconnect-google">Remember this device</button>'}<div class="settings-row"><span>On this device</span><button id="disconnect-google">Log out</button></div><div class="settings-row"><span>Lost a device?</span><button id="signout-all">Log out all devices</button></div><p class="tiny">Your Sheet stays private. Clearing browser data or reinstalling the app may require signing in again.</p></section>` : '';
+    const protectedDevice=pages&&HealthConnection.passkeyEnabled();
+    const account = pages ? `<section class="card settings-card"><h2>Face ID / passkey</h2><p class="settings-intro">${protectedDevice?'Passkey unlock is enabled here. Your log locks when you leave the app and after 15 minutes of passkey access.':'Create a passkey to unlock your log with Face ID on iPhone, or your device’s screen lock.'}</p>${HealthConnection.supportsPasskey()?'<button class="full-button" id="setup-passkey">'+(protectedDevice?'Add another passkey':'Set up Face ID / passkey')+'</button>':'<p class="tiny">Open Daily Health in Safari on your iPhone to set up a passkey.</p>'}${protectedDevice?'<div class="settings-row"><span>Take a break</span><button id="lock-passkey">Lock now</button></div>':''}<div class="settings-row"><span>Passkey recovery</span><button id="remove-passkeys">Remove all passkeys</button></div><p class="tiny">Your device may use its passcode instead of Face ID. Google sign-in remains available for recovery.</p></section><section class="card settings-card"><h2>Your connection</h2><p class="settings-intro">${protectedDevice?'Signed in for this visit. Your passkey can unlock future visits.':remembered?'This device is remembered until '+new Date(remembered).toLocaleDateString()+'. Open the app anytime to continue.':'Signed in for this visit. Remember this device to skip sign-in next time.'}</p>${remembered||protectedDevice?'':'<button class="secondary" id="reconnect-google">Remember this device</button>'}<div class="settings-row"><span>On this device</span><button id="disconnect-google">Log out</button></div><div class="settings-row"><span>Lost a device?</span><button id="signout-all">Log out all devices</button></div><p class="tiny">Signing out all devices ends their connections. To revoke passkeys too, use Remove all passkeys above.</p></section>` : '';
     return heading('Settings','Make this fit your routine')+account+`<form id="settings-form"><section class="card settings-card"><h2>Your preferences</h2><div class="field-pair"><div class="field"><label for="unit">Weight unit</label><select id="unit" name="unit"><option value="lb" ${s.unit==='lb'?'selected':''}>Pounds (lb)</option><option value="kg" ${s.unit==='kg'?'selected':''}>Kilograms (kg)</option></select></div><div class="field"><label for="weightMode">Current focus</label><select id="weightMode" name="weightMode"><option value="lose" ${s.weightMode==='lose'?'selected':''}>Losing weight</option><option value="maintain" ${s.weightMode==='maintain'?'selected':''}>Maintaining</option></select></div></div><p class="tiny">Changing your focus preserves your history.</p><div class="field"><label for="goalWeight">Optional target weight (${s.unit})</label><input type="number" step="0.1" min="0.1" id="goalWeight" name="goalWeight" value="${value(s.goalWeightKg)}" placeholder="No target"></div><div class="field-pair"><div class="field"><label for="rangeMin">Maintenance minimum (${s.unit})</label><input type="number" id="rangeMin" name="rangeMin" step="0.1" value="${value(s.rangeMinKg)}" placeholder="Optional"></div><div class="field"><label for="rangeMax">Maintenance maximum (${s.unit})</label><input type="number" id="rangeMax" name="rangeMax" step="0.1" value="${value(s.rangeMaxKg)}" placeholder="Optional"></div></div><h3 style="margin-top:22px">Sleep goal <span class="tiny">Optional</span></h3>${sleepInputs('sleep-goal',s.sleepGoalMinutes)}<p class="tiny">Leave both fields blank for no sleep goal.</p><div class="field-pair"><div class="field"><label for="exerciseGoal">Exercise days per week</label><input id="exerciseGoal" name="exerciseGoal" type="number" min="1" max="7" step="1" value="${s.exerciseGoal===null?'':s.exerciseGoal}" placeholder="Optional"></div></div><label class="switch-label" for="sportEnabled"><span>Show Sport button</span><input type="checkbox" id="sportEnabled" name="sportEnabled" ${s.sportEnabled?'checked':''}></label><div class="field"><label for="timezone">Timezone</label><input id="timezone" name="timezone" value="${escape(s.timezone)}" required></div><div class="field"><label for="weekStart">Week starts on</label><select id="weekStart" name="weekStart"><option value="1" ${s.weekStart===1?'selected':''}>Monday</option><option value="0" ${s.weekStart===0?'selected':''}>Sunday</option></select></div><p class="tiny">Your log keeps this timezone while traveling. Existing dates do not move.</p><div id="settings-error" class="error-box" hidden></div><button class="finish" id="save-settings" style="margin-top:22px">Save preferences</button></section></form>
-    <section class="card settings-card"><h2>Apple Health</h2><p class="settings-intro">Import sleep and Watch steps, and send saved weights using free iPhone Shortcuts.</p><button id="open-apple-health" class="full-button">Manage Apple Health ${icon('chevron')}</button></section><section class="card settings-card"><h2>Your data</h2><p class="settings-intro">${preview?'This preview stores entries only in this browser. Your Google Sheet is separate.':'Your entries are stored in your private Google Sheet.'}</p>${state.spreadsheetUrl?`<div class="settings-row"><span>Private data Sheet</span><a href="${escape(state.spreadsheetUrl)}" target="_blank" rel="noopener">Open Sheet ${icon('chevron')}</a></div>`:''}<div class="settings-row"><span>Full backup</span><button id="export-json">Export JSON ${icon('export')}</button></div><div class="settings-row"><span>For a spreadsheet</span><button id="export-csv">Export CSV ${icon('export')}</button></div><div class="settings-row"><span>Restore missing days</span><button id="restore">Import backup ${icon('chevron')}</button></div><p class="tiny" style="margin-top:15px">Imports add missing dates without overwriting existing entries. Keep occasional backups in private storage.</p></section><p class="tiny" style="text-align:center">Daily Health · Version 0.10.2</p>`;
+    <section class="card settings-card"><h2>Apple Health</h2><p class="settings-intro">Import sleep and Watch steps, and send saved weights using free iPhone Shortcuts.</p><button id="open-apple-health" class="full-button">Manage Apple Health ${icon('chevron')}</button></section><section class="card settings-card"><h2>Your data</h2><p class="settings-intro">${preview?'This preview stores entries only in this browser. Your Google Sheet is separate.':'Your entries are stored in your private Google Sheet.'}</p>${state.spreadsheetUrl?`<div class="settings-row"><span>Private data Sheet</span><a href="${escape(state.spreadsheetUrl)}" target="_blank" rel="noopener">Open Sheet ${icon('chevron')}</a></div>`:''}<div class="settings-row"><span>Full backup</span><button id="export-json">Export JSON ${icon('export')}</button></div><div class="settings-row"><span>For a spreadsheet</span><button id="export-csv">Export CSV ${icon('export')}</button></div><div class="settings-row"><span>Restore missing days</span><button id="restore">Import backup ${icon('chevron')}</button></div><p class="tiny" style="margin-top:15px">Imports add missing dates without overwriting existing entries. Keep occasional backups in private storage.</p></section><p class="tiny" style="text-align:center">Daily Health · Version 0.11.0</p>`;
   }
   function render() {
-    if(!state.loaded)return;
+    if(!state.loaded||privacyLocked)return;
     const focused=document.activeElement?.id;
     $('main').innerHTML=state.tab==='today'?renderToday():state.tab==='trends'?renderTrends():state.tab==='history'?renderHistory():state.tab==='health'?renderAppleHealth():renderSettings();
     document.querySelectorAll('[data-tab]').forEach(b=>{if(b.dataset.tab===state.tab)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');});
     bind();
     if(focused && $(focused)) $(focused).focus({preventScroll:true});
   }
-  function openDialog(html) { $('dialog-content').innerHTML=html; $('editor').showModal(); const close=$('close-dialog'); if(close)close.onclick=()=> $('editor').close(); }
+  function openDialog(html) { $('dialog-content').innerHTML=html; if(privacyLocked)resumeDialog=true;else $('editor').showModal(); const close=$('close-dialog'); if(close)close.onclick=()=> $('editor').close(); }
   function dialogHead(title) { return `<div class="dialog-head"><h2>${title}</h2><button type="button" id="close-dialog" class="icon-button" aria-label="Close">${icon('close')}</button></div>`; }
   function editNotes() {
     const day=visibleDay(), notes=day.notes || '';
@@ -450,6 +509,9 @@
     }catch(error){$('metric-error').textContent=error.message;}};
   }
   function bind() {
+    if($('setup-passkey'))$('setup-passkey').onclick=setupPasskey;
+    if($('remove-passkeys'))$('remove-passkeys').onclick=removePasskeys;
+    if($('lock-passkey'))$('lock-passkey').onclick=lockPrivatePage;
     if($('open-apple-health'))$('open-apple-health').onclick=()=>{safeNavigate(()=>state.tab='health');if(state.tab==='health')refreshHealthConnection();};
     if($('health-back-settings'))$('health-back-settings').onclick=()=>safeNavigate(()=>state.tab='settings');
     if($('health-import-sleep'))$('health-import-sleep').onclick=()=>openSleepImport('sleep');
@@ -471,8 +533,8 @@
     if($('disconnect-google'))$('disconnect-google').onclick=logOut;
     if($('signout-all'))$('signout-all').onclick=()=>{
       if(state.queue.length||state.busy){toast('Finish your pending save first.');return;}
-      openDialog(dialogHead('Log out all devices?')+'<p>Every remembered phone and browser will need to connect Google again. Your saved log stays in your Sheet. Confirm with your Google account to continue.</p><p class="tiny danger" id="signout-error" role="alert"></p><button class="primary" id="signout-confirm">Confirm with Google</button>');
-      $('signout-confirm').onclick=async e=>{e.currentTarget.disabled=true;try{await HealthConnection.signOutAll();clearSignedInPage('All remembered devices are signed out.');}catch(error){$('signout-error').textContent=error.message;$('signout-confirm').disabled=false;}};
+      openDialog(dialogHead('Log out all devices?')+'<p>This ends all remembered connections and passkey visits. Your saved log stays in your Sheet. Registered passkeys can still unlock a new visit; use Remove all passkeys to revoke them. Confirm with Google to continue.</p><p class="tiny danger" id="signout-error" role="alert"></p><button class="primary" id="signout-confirm">Confirm with Google</button>');
+      $('signout-confirm').onclick=async e=>{e.currentTarget.disabled=true;authenticationBusy=true;try{await HealthConnection.signOutAll();clearSignedInPage('All devices are signed out.');}catch(error){$('signout-error').textContent=error.message;$('signout-confirm').disabled=false;}finally{authenticationBusy=false;}};
     };
     document.querySelectorAll('[data-habit]').forEach(b=>b.onclick=()=>{const day=visibleDay(),key=b.dataset.habit,done=C.EXERCISE.includes(key)?day.exerciseComplete:day.foodComplete;queueSave({[key]:day[key]===true?(done?false:null):true});});
     document.querySelectorAll('[data-quality]').forEach(b=>b.onclick=()=>queueSave({quality:visibleDay().quality===b.dataset.quality?null:b.dataset.quality}));
@@ -539,8 +601,8 @@
   };
   async function load() {
     const generation=connectionGeneration;
-    try{const data=await api('getBootstrap');if(generation!==connectionGeneration)return;state.settings=C.validateSettings(data.settings);state.days=data.days.map(day=>({...C.blankDay(day.date),...day}));state.today=data.today;state.selected=state.selected||state.today;state.spreadsheetUrl=data.spreadsheetUrl;state.loaded=true;$('log-out').hidden=!pages;document.body.classList.remove('connection-locked');render();}
-    catch(error){if(pages&&!state.loaded){showConnection(error.message);return;}$('main').innerHTML=`<div class="card"><h2>Couldn’t open your log</h2><p class="settings-intro">${escape(error.message)}</p><button id="reload" class="finish">Try again</button></div>`;$('reload').onclick=load;}
+    try{const data=await api('getBootstrap');if(generation!==connectionGeneration)return;state.settings=C.validateSettings(data.settings);state.days=data.days.map(day=>({...C.blankDay(day.date),...day}));state.today=data.today;state.selected=state.selected||state.today;state.spreadsheetUrl=data.spreadsheetUrl;state.loaded=true;$('log-out').hidden=!pages;if(!privacyLocked)document.body.classList.remove('connection-locked');render();}
+    catch(error){if(generation!==connectionGeneration)return;if(pages&&(!state.loaded||privacyLocked)){showConnection(error.message);return;}$('main').innerHTML=`<div class="card"><h2>Couldn’t open your log</h2><p class="settings-intro">${escape(error.message)}</p><button id="reload" class="finish">Try again</button></div>`;$('reload').onclick=load;}
   }
   $('log-out').onclick=logOut;
   $('open-settings').innerHTML=icon('settings');$('open-settings').onclick=()=>safeNavigate(()=>state.tab=state.tab==='settings'?'today':'settings');
@@ -552,6 +614,8 @@
   window.addEventListener('offline',()=>toast('Offline. Reconnect before saving changes.'));
   let lastResumeRefresh=0;
   document.addEventListener('visibilitychange',async()=>{
+    if(document.hidden){lockPrivatePage();return;}
+    if(privacyLocked)return;
     if(document.hidden||!state.loaded||state.queue.length||state.busy||healthBusy||$('editor').open||Date.now()-lastResumeRefresh<15000)return;
     lastResumeRefresh=Date.now();
     const generation=connectionGeneration;
@@ -565,13 +629,16 @@
     }catch(error){if(error.signIn)toast('Reconnect Google to see your latest entries.');}
   });
   $('editor').addEventListener('cancel',e=>{if(healthBusy)e.preventDefault();});
-  $('editor').addEventListener('close',()=>{if(!$('editor').open&&!healthBusy){$('dialog-content').replaceChildren();healthReview=null;}});
+  $('editor').addEventListener('close',()=>{if(!$('editor').open&&!healthBusy&&!privacyLocked){$('dialog-content').replaceChildren();healthReview=null;}});
   if(preview)$('preview-banner').hidden=false;
   if(pages){
     $('connect-google').onclick=e=>connectGoogle(e.currentTarget);
-    window.addEventListener('storage',e=>{if((e.key===HealthConnection.storageKey&&e.newValue===null)||e.key===null){HealthConnection.forgetLocal();clearSignedInPage('Signed out in another window. Connect Google to open your log.');}});
+    $('unlock-passkey').onclick=unlockWithPasskey;
+    window.addEventListener('pagehide',lockPrivatePage);
+    window.addEventListener('pageshow',()=>{if(privacyLocked)showConnection('Your log is locked. Unlock to continue.');});
+    setInterval(()=>{if(HealthConnection.passkeyExpires()&&Date.now()>=HealthConnection.passkeyExpires())lockPrivatePage();},1000);
+    window.addEventListener('storage',e=>{if((e.key===HealthConnection.storageKey&&e.newValue===null)||e.key===HealthConnection.passkeyStorageKey||e.key===null){HealthConnection.forgetLocal();clearSignedInPage('Your connection changed in another window. Unlock or connect Google to open your log.');}});
     if(HealthConnection.restore()){showConnection('Opening your log…');load();}else showConnection();
   }
   else load();
 })();
-

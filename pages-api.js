@@ -4,7 +4,10 @@
   else root.HealthConnection = factory(root.DAILY_HEALTH_CONFIG || {}, {
     fetch: root.fetch.bind(root), oauth: () => root.google?.accounts?.oauth2,
     now: () => Date.now(), origin: root.location.origin, storage: () => root.localStorage,
-    randomBytes: () => root.crypto.getRandomValues(new Uint8Array(32))
+    randomBytes: () => root.crypto.getRandomValues(new Uint8Array(32)),
+    credentials: root.navigator.credentials, passkeySupported: () => !!root.PublicKeyCredential && root.isSecureContext,
+    encode: bytes => root.btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''),
+    decode: value => Uint8Array.from(root.atob(value.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0))
   });
 })(typeof window === 'object' ? window : this, function (config, env) {
   'use strict';
@@ -71,7 +74,16 @@
     if (data.done !== true || !data.response || !Object.hasOwn(data.response, 'result')) throw new Error('Google did not confirm the result. Retry to check it safely.');
     return data.response.result;
   }
-  const storageKey = 'daily-health-device-v1', maxAge = 90 * 86400000;
+  const storageKey = 'daily-health-device-v1', passkeyStorageKey = 'daily-health-passkey-v1', maxAge = 90 * 86400000;
+  let passkeyVisit = null, registration = null, passkeyBusy = false;
+  const supportsPasskey = () => deviceReady() && !!env.passkeySupported?.() && !!env.credentials;
+  function passkeyEnabled() { try { return env.storage?.().getItem(passkeyStorageKey) === 'true'; } catch { return false; } }
+  function passkeyRemember() { env.storage().setItem(passkeyStorageKey, 'true'); }
+  function randomToken() {
+    const bytes = env.randomBytes();
+    if (bytes.length !== 32) throw new Error('Could not create a secure connection.');
+    return 'dhd1_' + Array.from(bytes, n => n.toString(16).padStart(2, '0')).join('');
+  }
   let device = null, generation = 0, enrolling = null;
   const deviceReady = () => ready() && /^https:\/\/script\.google\.com\/macros\/s\/[a-zA-Z0-9_-]{30,}\/exec$/.test(config.deviceEndpoint || '');
   function clearDevice(expected) {
@@ -83,6 +95,7 @@
   }
   function restore() {
     device = null;
+    if (passkeyEnabled()) { clearDevice(); return false; }
     if (!deviceReady()) return false;
     try {
       const saved = JSON.parse(env.storage?.().getItem(storageKey) || 'null');
@@ -118,7 +131,7 @@
       await authorize();
       if(start!==generation){clearOAuth();throw authError();}
       let warning='';
-      if(remember&&!rememberedUntil()){
+      if(remember&&!passkeyEnabled()&&!rememberedUntil()){
         try{
           if(!deviceReady()||!env.storage||!env.randomBytes)throw new Error('Remembering this device is unavailable.');
           const probe=storageKey+'-check';env.storage().setItem(probe,'1');env.storage().removeItem(probe);
@@ -141,6 +154,11 @@
   async function call(method,request){
     if(!methods.has(method))throw new Error('Unknown app action.');
     if(!ready())throw new Error('Your Google connection is being set up. Check back shortly.');
+    if(passkeyVisit){
+      if(now()>=passkeyVisit.expiresAt){lock();throw authError('Your log is locked. Unlock with your passkey or connect Google.');}
+      try { return await deviceCall(passkeyVisit,method,request); }
+      catch(error){if(error.signIn)lock();throw error;}
+    }
     if(device){
       if(now()>=device.expiresAt){clearDevice(device);throw authError();}
       return deviceCall(device,method,request);
@@ -148,14 +166,94 @@
     return oauthCall(method,request);
   }
   async function disconnect(){
-    const current=device;generation++;clearDevice();clearOAuth();
+    const current=passkeyVisit||device;generation++;passkeyVisit=null;registration=null;clearDevice();clearOAuth();
     if(current){try{await deviceCall(current,'signOutDevice');}catch(error){return {revoked:!!error.signIn};}}
     return {revoked:true};
   }
   async function signOutAll(){
     await authorize();await oauthCall('revokeAllDeviceSessions');
-    generation++;clearDevice();clearOAuth();
+    generation++;passkeyVisit=null;registration=null;clearDevice();clearOAuth();
   }
-  function forgetLocal(){generation++;clearDevice();clearOAuth();}
-  return Object.freeze({ready,connect,call,disconnect,restore,rememberedUntil,signOutAll,forgetLocal,storageKey});
+  function forgetLocal(){generation++;passkeyVisit=null;registration=null;clearDevice();clearOAuth();}
+  function serializeCredential(credential) {
+    if(!credential || credential.type !== 'public-key')throw new Error('No passkey was selected.');
+    const response={};
+    for(const name of ['clientDataJSON','attestationObject','authenticatorData','signature','userHandle']){
+      const value=credential.response[name];if(value)response[name]=env.encode(new Uint8Array(value));
+    }
+    return {id:credential.id,rawId:env.encode(new Uint8Array(credential.rawId)),type:credential.type,response};
+  }
+  function passkeyError(error) {
+    if(error?.name==='NotAllowedError'||error?.name==='AbortError')return new Error('Passkey was canceled or timed out. Try again, or connect Google.');
+    if(error?.name==='InvalidStateError')return new Error('A passkey already exists on this device. Use Unlock with Face ID / passkey.');
+    return error;
+  }
+  async function preparePasskey() {
+    if(!supportsPasskey())throw new Error('Passkeys are unavailable here. Open Daily Health in Safari on your iPhone.');
+    if(passkeyBusy)throw new Error('Finish the current sign-in first.');
+    const start=generation;passkeyBusy=true;
+    try {
+      const probe=passkeyStorageKey+'-check';env.storage().setItem(probe,'1');env.storage().removeItem(probe);
+      await authorize();const options=await oauthCall('beginPasskeyRegistration');
+      if(start!==generation)throw authError();
+      if(options?.rp?.id!==new URL(config.origin).hostname||!options.challenge||!options.user?.id)throw new Error('Invalid passkey setup.');
+      registration={options,generation:start};return true;
+    } finally {passkeyBusy=false;}
+  }
+  async function createPasskey() {
+    if(!registration||registration.generation!==generation||passkeyBusy)throw new Error('Start passkey setup again.');
+    const current=registration, previous=device;registration=null;passkeyBusy=true;
+    try {
+      const options=current.options;
+      const publicKey={...options,challenge:env.decode(options.challenge),user:{...options.user,id:env.decode(options.user.id)},excludeCredentials:(options.excludeCredentials||[]).map(item=>({...item,id:env.decode(item.id)}))};
+      const credential=await env.credentials.create({publicKey});
+      if(current.generation!==generation)throw authError();
+      await oauthCall('finishPasskeyRegistration',{challenge:options.challenge,credential:serializeCredential(credential),...(previous?{previousSession:previous.token}:{})});
+      if(current.generation!==generation)throw authError();
+      // Server has revoked the old remembered token. Store only this nonsecret preference.
+      clearDevice();clearOAuth();passkeyVisit=null;passkeyRemember();generation++;
+      return {ok:true};
+    } catch(error){throw passkeyError(error);} finally{passkeyBusy=false;}
+  }
+  async function passkeyPost(action,session,fields={}) {
+    if(!deviceReady())throw authError();
+    let response;
+    try {response=await env.fetch(config.deviceEndpoint,{method:'POST',mode:'cors',credentials:'omit',cache:'no-store',redirect:'follow',headers:{'Content-Type':'text/plain;charset=UTF-8'},body:JSON.stringify({kind:'passkey',action,token:session,...fields}),signal:AbortSignal.timeout(55000)});}
+    catch{throw new Error('Could not reach Daily Health. Check your connection and try again.');}
+    let data;try{data=await response.json();}catch{throw new Error('Could not verify your passkey. Try again or connect Google.');}
+    if(!response.ok||data?.ok!==true||!data.result)throw new Error(data?.message||'Passkey verification failed.');
+    return data.result;
+  }
+  async function unlockPasskey() {
+    if(!supportsPasskey())throw new Error('Passkeys are unavailable in this browser. Connect Google to continue.');
+    if(passkeyBusy)throw new Error('Finish the current sign-in first.');
+    const start=generation, session=randomToken();passkeyBusy=true;
+    try {
+      const options=await passkeyPost('begin',session);
+      if(start!==generation)throw authError();
+      if(options?.rpId!==new URL(config.origin).hostname)throw new Error('Invalid passkey request.');
+      const credential=await env.credentials.get({publicKey:{...options,challenge:env.decode(options.challenge),userVerification:'required'}});
+      if(start!==generation)throw authError();
+      const result=await passkeyPost('finish',session,{challenge:options.challenge,credential:serializeCredential(credential)});
+      const next={token:session,expiresAt:result.expiresAt};
+      if(!Number.isFinite(next.expiresAt)||next.expiresAt<=now()||next.expiresAt>now()+15*60000+60000)throw new Error('Invalid passkey connection.');
+      if(start!==generation){await deviceCall(next,'signOutDevice').catch(()=>{});throw authError();}
+      // Storage failure must not leave a remembered bearer connection behind.
+      const previous=device;clearDevice();clearOAuth();
+      if(previous)await deviceCall(previous,'signOutDevice').catch(()=>{});
+      passkeyRemember();passkeyVisit=next;return {ok:true};
+    } catch(error){throw passkeyError(error);} finally {passkeyBusy=false;}
+  }
+  function lock() {
+    const current=passkeyVisit;generation++;passkeyVisit=null;registration=null;clearOAuth();
+    if(passkeyEnabled())clearDevice();
+    if(current)deviceCall(current,'signOutDevice').catch(()=>{});
+  }
+  async function removePasskeys() {
+    await authorize();await oauthCall('revokeAllPasskeys');
+    env.storage?.().removeItem(passkeyStorageKey);forgetLocal();
+  }
+  return Object.freeze({ready,connect,call,disconnect,restore,rememberedUntil,signOutAll,forgetLocal,storageKey,
+    passkeyStorageKey,supportsPasskey,passkeyEnabled,preparePasskey,createPasskey,unlockPasskey,removePasskeys,lock,
+    passkeyBusy:()=>passkeyBusy,passkeyExpires:()=>passkeyVisit?.expiresAt||null});
 });
