@@ -64,3 +64,9 @@
 .remember-device{display:flex;align-items:center;justify-content:center;gap:10px;font-size:14px;line-height:1.5;margin:18px 0 8px}.remember-device input{width:20px;height:20px;accent-color:var(--blue);flex-shrink:0}
 
 .fasting-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.fasting-options button:first-child{grid-column:1/-1}
+
+
+/* Keep logout visible on every signed-in screen, including narrow phones. */
+.header-actions{display:flex;align-items:center;gap:8px;flex-shrink:0}
+.logout-button{min-height:44px;padding:9px 12px;border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--blue);font-size:13px;font-weight:600;white-space:nowrap}
+.logout-button[hidden]{display:none}
