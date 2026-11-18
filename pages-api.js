@@ -95,7 +95,6 @@
   }
   function restore() {
     device = null;
-    if (passkeyEnabled()) { clearDevice(); return false; }
     if (!deviceReady()) return false;
     try {
       const saved = JSON.parse(env.storage?.().getItem(storageKey) || 'null');
@@ -131,7 +130,7 @@
       await authorize();
       if(start!==generation){clearOAuth();throw authError();}
       let warning='';
-      if(remember&&!passkeyEnabled()&&!rememberedUntil()){
+      if(remember&&!rememberedUntil()){
         try{
           if(!deviceReady()||!env.storage||!env.randomBytes)throw new Error('Remembering this device is unavailable.');
           const probe=storageKey+'-check';env.storage().setItem(probe,'1');env.storage().removeItem(probe);
@@ -147,6 +146,9 @@
           device=next;
         }catch(error){warning='Signed in for this visit, but this device could not be remembered. '+(error.message||'Check browser storage settings.');}
       }
+      if(start!==generation){clearOAuth();throw authError();}
+      const previousVisit=passkeyVisit;passkeyVisit=null;
+      if(previousVisit)deviceCall(previousVisit,'signOutDevice').catch(()=>{});
       return {remembered:!!rememberedUntil(),warning};
     })().finally(()=>{enrolling=null;});
     return enrolling;
@@ -224,29 +226,38 @@
     if(!response.ok||data?.ok!==true||!data.result)throw new Error(data?.message||'Passkey verification failed.');
     return data.result;
   }
-  async function unlockPasskey() {
+  async function unlockPasskey({remember=false}={}) {
     if(!supportsPasskey())throw new Error('Passkeys are unavailable in this browser. Connect Google to continue.');
     if(passkeyBusy)throw new Error('Finish the current sign-in first.');
     const start=generation, session=randomToken();passkeyBusy=true;
     try {
-      const options=await passkeyPost('begin',session);
+      const options=await passkeyPost('begin',session,{remember});
       if(start!==generation)throw authError();
       if(options?.rpId!==new URL(config.origin).hostname)throw new Error('Invalid passkey request.');
       const credential=await env.credentials.get({publicKey:{...options,challenge:env.decode(options.challenge),userVerification:'required'}});
       if(start!==generation)throw authError();
-      const result=await passkeyPost('finish',session,{challenge:options.challenge,credential:serializeCredential(credential)});
-      const next={token:session,expiresAt:result.expiresAt};
-      if(!Number.isFinite(next.expiresAt)||next.expiresAt<=now()||next.expiresAt>now()+15*60000+60000)throw new Error('Invalid passkey connection.');
+      const result=await passkeyPost('finish',session,{challenge:options.challenge,credential:serializeCredential(credential),remember});
+      const next={token:session,expiresAt:result.expiresAt,origin:config.origin,deploymentId:config.deploymentId,endpoint:config.deviceEndpoint};
+      if(!Number.isFinite(next.expiresAt)||next.expiresAt<=now()||next.expiresAt>now()+(remember?maxAge:15*60000)+60000)throw new Error('Invalid passkey connection.');
       if(start!==generation){await deviceCall(next,'signOutDevice').catch(()=>{});throw authError();}
       // Storage failure must not leave a remembered bearer connection behind.
       const previous=device;clearDevice();clearOAuth();
       if(previous)await deviceCall(previous,'signOutDevice').catch(()=>{});
-      passkeyRemember();passkeyVisit=next;return {ok:true};
+      if(start!==generation){await deviceCall(next,'signOutDevice').catch(()=>{});throw authError();}
+      let warning='';
+      try{
+        passkeyRemember();
+        if(remember){env.storage().setItem(storageKey,JSON.stringify(next));device=next;}
+      }catch{
+        clearDevice();
+        if(remember)warning='Unlocked for this visit, but this browser could not remember the connection. Keep this page open or check browser storage settings.';
+      }
+      passkeyVisit=device?null:next;
+      return {ok:true,remembered:!!device,warning};
     } catch(error){throw passkeyError(error);} finally {passkeyBusy=false;}
   }
   function lock() {
-    const current=passkeyVisit;generation++;passkeyVisit=null;registration=null;clearOAuth();
-    if(passkeyEnabled())clearDevice();
+    const current=passkeyVisit||device;generation++;passkeyVisit=null;registration=null;clearOAuth();clearDevice();
     if(current)deviceCall(current,'signOutDevice').catch(()=>{});
   }
   async function removePasskeys() {
