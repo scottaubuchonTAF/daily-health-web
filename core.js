@@ -1,7 +1,7 @@
 /* Shared pure rules. Used unchanged in the browser, Apps Script, and tests. */
 var HealthCore = (function () {
   'use strict';
-  const VERSION = 7;
+  const VERSION = 8;
   const NOTES_LIMIT = 1000;
   const FASTING_HOURS = [0, 16, 24];
   const FASTING_RANGES = ['16to20', '20to24'];
@@ -18,9 +18,11 @@ var HealthCore = (function () {
   const FOOD = ['fruit', 'veggie', 'protein', 'beer', 'margarita', 'chipsPretzels', 'sweets', 'ateOut'];
   const EXERCISE = ['lift', 'cardio', 'sport'];
   const OTHER = ['zyn'];
-  const HABITS = [...EXERCISE, ...FOOD, ...OTHER];
+  const SUPPLEMENTS = ['proteinShake', 'collagen', 'creatine'];
+  const SUPPLEMENT_LABELS = {proteinShake:'Protein shake',collagen:'Collagen',creatine:'Creatine'};
+  const HABITS = [...EXERCISE, ...FOOD, ...OTHER, ...SUPPLEMENTS];
   // New columns go at the end so existing Sheet rows and older clients keep their positions.
-  const DAY_FIELDS = ['date', 'revision', 'mutationId', 'createdAt', 'updatedAt', 'weightKg', 'weightStatus', 'sleepMinutes', 'quality', ...HABITS, 'foodComplete', 'exerciseComplete', 'otherComplete', 'alcoholDrinks', 'waterOzRange', 'workoutRating', 'steps', 'fastingHours', 'notes', 'fastingRange'];
+  const DAY_FIELDS = ['date', 'revision', 'mutationId', 'createdAt', 'updatedAt', 'weightKg', 'weightStatus', 'sleepMinutes', 'quality', ...EXERCISE, ...FOOD, ...OTHER, 'foodComplete', 'exerciseComplete', 'otherComplete', 'alcoholDrinks', 'waterOzRange', 'workoutRating', 'steps', 'fastingHours', 'notes', 'fastingRange', ...SUPPLEMENTS];
   const EDITABLE = ['weightKg', 'weightStatus', 'sleepMinutes', 'quality', ...HABITS, 'alcoholDrinks', 'waterOzRange', 'workoutRating', 'steps', 'fastingHours', 'notes', 'fastingRange'];
   const DEFAULTS = { schemaVersion: VERSION, revision: 0, unit: 'lb', timezone: 'America/New_York', weekStart: 1, sportEnabled: false, weightMode: 'lose', goalWeightKg: null, rangeMinKg: null, rangeMaxKg: null, sleepGoalMinutes: null, exerciseGoal: null };
   const clone = x => JSON.parse(JSON.stringify(x));
@@ -91,7 +93,7 @@ var HealthCore = (function () {
     // Removing the last exercise also clears its grade; old clients preserve grades on unrelated edits.
     if (!hasWorkout(next) && EXERCISE.some(key => Object.hasOwn(patch, key)) && !Object.hasOwn(patch, 'workoutRating')) next.workoutRating = null;
     if (action === 'finish') {
-      [...FOOD, ...OTHER, 'lift', 'cardio', ...(settings.sportEnabled ? ['sport'] : [])].forEach(k => { if (next[k] === null) next[k] = false; });
+      [...FOOD, ...OTHER, ...SUPPLEMENTS, 'lift', 'cardio', ...(settings.sportEnabled ? ['sport'] : [])].forEach(k => { if (next[k] === null) next[k] = false; });
       next.foodComplete = next.exerciseComplete = next.otherComplete = true;
     } else assert(!action, 'Unknown update action.');
     return validateDay(next, lastDate);
@@ -208,6 +210,6 @@ var HealthCore = (function () {
     if (direction === 'after') groups.sort((a,b) => WORKOUT_RATINGS.indexOf(a.key) - WORKOUT_RATINGS.indexOf(b.key));
     return { direction, factor, ratedCount: workouts.length, pairedCount: groups.reduce((n,g) => n + g.count, 0), groups, minimum: 3, ready: groups.filter(g => g.count >= 3).length >= 2 };
   }
-  return { VERSION, NOTES_LIMIT, FASTING_HOURS, FASTING_RANGES, FASTING_OPTIONS, fastingChoice, fastingLabel, WORKOUT_RATINGS, DRINK_RANGES, WATER_RANGES, FOOD, EXERCISE, OTHER, HABITS, DAY_FIELDS, DEFAULTS, EDITABLE, clone, assert, today, validDate, addDays, distance, blankDay, complete, hasWorkout, hasContent, csvCell, asKg, asUnit, formatWeight, applyPatch, validateDay, validateSettings, validateImport, weekDates, weekly, streak, weightSeries, forecast, workoutPatterns };
+  return { VERSION, SUPPLEMENTS, SUPPLEMENT_LABELS, NOTES_LIMIT, FASTING_HOURS, FASTING_RANGES, FASTING_OPTIONS, fastingChoice, fastingLabel, WORKOUT_RATINGS, DRINK_RANGES, WATER_RANGES, FOOD, EXERCISE, OTHER, HABITS, DAY_FIELDS, DEFAULTS, EDITABLE, clone, assert, today, validDate, addDays, distance, blankDay, complete, hasWorkout, hasContent, csvCell, asKg, asUnit, formatWeight, applyPatch, validateDay, validateSettings, validateImport, weekDates, weekly, streak, weightSeries, forecast, workoutPatterns };
 })();
 if (typeof module !== 'undefined' && module.exports) module.exports = HealthCore;

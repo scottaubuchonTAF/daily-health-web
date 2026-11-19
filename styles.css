@@ -76,3 +76,6 @@
 .startup-status[hidden]{display:none}.startup-status strong,.startup-status small{display:block}.startup-status small{margin-top:3px;color:var(--muted);font-size:12px}.startup-status .spinner{width:18px;height:18px;flex-shrink:0;margin:0}.startup-status button{min-height:44px;color:var(--blue);font-weight:600;white-space:nowrap}
 .snapshot-view #main button:disabled{opacity:1;cursor:wait}.snapshot-view .save-state{visibility:hidden}
 @media(prefers-reduced-motion:reduce){.spinner{animation:none}}
+
+.supplements-card{grid-column:1/-1}.supplement-options{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.supplement-options .chip{padding:12px 8px;font-size:14px;min-width:0}.supplement-options .check{flex-shrink:0}
+@media(max-width:420px){.supplement-options{grid-template-columns:1fr 1fr}.supplement-options .chip:first-child{grid-column:1/-1}}
