@@ -10,13 +10,13 @@
   "lang": "en",
   "icons": [
     {
-      "src": "/assets/icon-192.png",
+      "src": "/assets/icon-192.png?v=d54e0a940a28",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/assets/icon-512.png",
+      "src": "/assets/icon-512.png?v=d54e0a940a28",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"

@@ -80,3 +80,4 @@
 .supplements-card{grid-column:1/-1}.supplement-options{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.supplement-options .chip{padding:12px 8px;font-size:14px;min-width:0}.supplement-options .check{flex-shrink:0}
 @media(max-width:420px){.supplement-options{grid-template-columns:1fr 1fr}.supplement-options .chip:first-child{grid-column:1/-1}}
 .erin-card{grid-column:1/-1}.erin-comparison{width:100%;border-collapse:collapse;table-layout:fixed;margin-top:16px;font-size:14px}.erin-comparison th,.erin-comparison td{padding:14px 6px;text-align:center;vertical-align:top;border-bottom:1px solid var(--line);overflow-wrap:anywhere}.erin-comparison th:first-child{text-align:left}.erin-comparison .tiny{display:block;margin-top:5px;font-weight:400}.erin-comparison strong{font-size:20px}
+.app-mark img{display:block;width:100%;height:100%;object-fit:cover}
