@@ -106,6 +106,45 @@
     return !!device;
   }
   function rememberedUntil() { return device && device.expiresAt > now() ? device.expiresAt : null; }
+  // A recent, read-only copy lives inside this device's connection record, so logout
+  // and lock remove the data and authorization together. Never cache OAuth or sync keys.
+  function snapshotRecord() {
+    if(!deviceReady()||!rememberedUntil())return null;
+    try{
+      const saved=JSON.parse(env.storage().getItem(storageKey)||'null');
+      return saved?.token===device.token&&saved.origin===config.origin&&saved.deploymentId===config.deploymentId&&saved.endpoint===config.deviceEndpoint&&saved.expiresAt===device.expiresAt?saved:null;
+    }catch{return null;}
+  }
+  function readSnapshot() {
+    const snapshot=snapshotRecord()?.snapshot;
+    if(snapshot?.version!==1||!Number.isFinite(snapshot.savedAt)||snapshot.savedAt>now()+60000||snapshot.savedAt<now()-7*86400000)return null;
+    const data=snapshot.data;
+    if(!data?.settings||!Array.isArray(data.days)||data.days.length>20000||!/^\d{4}-\d{2}-\d{2}$/.test(data.today)||JSON.stringify(snapshot).length>1000000)return null;
+    return snapshot;
+  }
+  function cacheResult(method,request,result) {
+    try{
+      const saved=snapshotRecord();if(!saved)return;
+      let data;
+      if(method==='getBootstrap')data={settings:result.settings,days:result.days,today:result.today};
+      else if(method==='importData')delete saved.snapshot;
+      else{
+        const snapshot=readSnapshot();if(!snapshot)return;data=snapshot.data;
+        if((method==='saveDay'||method==='deleteDay')&&result.day){
+          data.days=data.days.filter(day=>day.date!==result.day.date).concat(result.day);
+        }else if(method==='deleteDay'&&result.ok===true&&!result.conflict)data.days=data.days.filter(day=>day.date!==request.date);
+        else if(method==='saveSettings'&&result.ok===true){data.settings=result.settings;data.today=result.today;}
+        else return;
+      }
+      if(data){
+        if(!data.settings||!Array.isArray(data.days)||data.days.length>20000||!/^\d{4}-\d{2}-\d{2}$/.test(data.today))return;
+        saved.snapshot={version:1,savedAt:now(),data};
+        if(JSON.stringify(saved.snapshot).length>1000000)delete saved.snapshot;
+      }
+      // setItem is atomic: a quota/storage failure keeps the existing connection.
+      env.storage().setItem(storageKey,JSON.stringify(saved));
+    }catch{}
+  }
   async function deviceCall(current, method, request) {
     if (!deviceReady()) throw authError();
     const body = JSON.stringify({kind:'app',session:current.token,method,...(request===undefined?{}:{request})});
@@ -154,6 +193,12 @@
     return enrolling;
   }
   async function call(method,request){
+    const start=generation,current=device;
+    const result=await requestAction(method,request);
+    if(current&&current===device&&start===generation)cacheResult(method,request,result);
+    return result;
+  }
+  async function requestAction(method,request){
     if(!methods.has(method))throw new Error('Unknown app action.');
     if(!ready())throw new Error('Your Google connection is being set up. Check back shortly.');
     if(passkeyVisit){
@@ -264,7 +309,7 @@
     await authorize();await oauthCall('revokeAllPasskeys');
     env.storage?.().removeItem(passkeyStorageKey);forgetLocal();
   }
-  return Object.freeze({ready,connect,call,disconnect,restore,rememberedUntil,signOutAll,forgetLocal,storageKey,
+  return Object.freeze({ready,connect,call,disconnect,restore,rememberedUntil,readSnapshot,signOutAll,forgetLocal,storageKey,
     passkeyStorageKey,supportsPasskey,passkeyEnabled,preparePasskey,createPasskey,unlockPasskey,removePasskeys,lock,
     passkeyBusy:()=>passkeyBusy,passkeyExpires:()=>passkeyVisit?.expiresAt||null});
 });

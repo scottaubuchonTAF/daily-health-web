@@ -72,3 +72,7 @@
 .header-actions{display:flex;align-items:center;gap:8px;flex-shrink:0}
 .logout-button{min-height:44px;padding:9px 12px;border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--blue);font-size:13px;font-weight:600;white-space:nowrap}
 .logout-button[hidden]{display:none}
+.startup-status{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:13px 16px;margin:0 0 20px;border:1px solid var(--line);border-radius:14px;background:var(--blue-soft);font-size:13px}
+.startup-status[hidden]{display:none}.startup-status strong,.startup-status small{display:block}.startup-status small{margin-top:3px;color:var(--muted);font-size:12px}.startup-status .spinner{width:18px;height:18px;flex-shrink:0;margin:0}.startup-status button{min-height:44px;color:var(--blue);font-weight:600;white-space:nowrap}
+.snapshot-view #main button:disabled{opacity:1;cursor:wait}.snapshot-view .save-state{visibility:hidden}
+@media(prefers-reduced-motion:reduce){.spinner{animation:none}}
