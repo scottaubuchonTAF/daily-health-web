@@ -85,6 +85,7 @@
 /* Consistent, decorative signposts and a daily log that follows the same order on every screen. */
 .section-emoji{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;font-family:"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif;font-size:21px;line-height:1.2;width:28px;letter-spacing:0}
 .scale-icon{color:var(--blue)}.scale-icon .icon{width:25px;height:25px;stroke-width:1.7}
+.page-heading>div:first-child{min-width:0}.personal-greeting{font-size:15px;font-weight:550;color:var(--muted);margin:0 0 8px;overflow-wrap:anywhere}.personal-greeting span{white-space:nowrap}
 .section-title{display:flex;align-items:center;gap:9px;color:var(--text);font-size:18px;font-weight:650;letter-spacing:-.3px;margin:0 0 16px}
 .full-button{display:inline-flex;align-items:center;gap:6px}
 .row>.section-title{margin:0;min-width:0}.row>.tiny{flex-shrink:0}

@@ -1,7 +1,7 @@
 /* Shared pure rules. Used unchanged in the browser, Apps Script, and tests. */
 var HealthCore = (function () {
   'use strict';
-  const VERSION = 9;
+  const VERSION = 10;
   const NOTES_LIMIT = 1000;
   const FASTING_HOURS = [0, 16, 24];
   const FASTING_RANGES = ['16to20', '20to24'];
@@ -18,13 +18,13 @@ var HealthCore = (function () {
   const FOOD = ['fruit', 'veggie', 'protein', 'beer', 'margarita', 'chipsPretzels', 'sweets', 'ateOut'];
   const EXERCISE = ['lift', 'cardio', 'sport'];
   const OTHER = ['zyn'];
-  const SUPPLEMENTS = ['proteinShake', 'collagen', 'creatine'];
-  const SUPPLEMENT_LABELS = {proteinShake:'Protein shake',collagen:'Collagen',creatine:'Creatine'};
+  const SUPPLEMENTS = ['proteinShake', 'collagen', 'creatine', 'melatonin', 'gummy'];
+  const SUPPLEMENT_LABELS = {proteinShake:'Protein shake',collagen:'Collagen',creatine:'Creatine',melatonin:'Melatonin',gummy:'Gummy'};
   const HABITS = [...EXERCISE, ...FOOD, ...OTHER, ...SUPPLEMENTS, 'erin'];
   // New columns go at the end so existing Sheet rows and older clients keep their positions.
-  const DAY_FIELDS = ['date', 'revision', 'mutationId', 'createdAt', 'updatedAt', 'weightKg', 'weightStatus', 'sleepMinutes', 'quality', ...EXERCISE, ...FOOD, ...OTHER, 'foodComplete', 'exerciseComplete', 'otherComplete', 'alcoholDrinks', 'waterOzRange', 'workoutRating', 'steps', 'fastingHours', 'notes', 'fastingRange', ...SUPPLEMENTS, 'erin'];
+  const DAY_FIELDS = ['date', 'revision', 'mutationId', 'createdAt', 'updatedAt', 'weightKg', 'weightStatus', 'sleepMinutes', 'quality', ...EXERCISE, ...FOOD, ...OTHER, 'foodComplete', 'exerciseComplete', 'otherComplete', 'alcoholDrinks', 'waterOzRange', 'workoutRating', 'steps', 'fastingHours', 'notes', 'fastingRange', 'proteinShake', 'collagen', 'creatine', 'erin', 'melatonin', 'gummy'];
   const EDITABLE = ['weightKg', 'weightStatus', 'sleepMinutes', 'quality', ...HABITS, 'alcoholDrinks', 'waterOzRange', 'workoutRating', 'steps', 'fastingHours', 'notes', 'fastingRange'];
-  const DEFAULTS = { schemaVersion: VERSION, revision: 0, unit: 'lb', timezone: 'America/New_York', weekStart: 1, sportEnabled: false, weightMode: 'lose', goalWeightKg: null, rangeMinKg: null, rangeMaxKg: null, sleepGoalMinutes: null, exerciseGoal: null };
+  const DEFAULTS = { schemaVersion: VERSION, revision: 0, unit: 'lb', timezone: 'America/New_York', weekStart: 1, sportEnabled: false, weightMode: 'lose', goalWeightKg: null, rangeMinKg: null, rangeMaxKg: null, sleepGoalMinutes: null, exerciseGoal: null, displayName: 'Scott' };
   const clone = x => JSON.parse(JSON.stringify(x));
   function assert(ok, message) { if (!ok) throw new Error(message); }
   function validDate(date) {
@@ -101,6 +101,9 @@ var HealthCore = (function () {
   function validateSettings(input) {
     const result = { ...DEFAULTS, ...input };
     Object.keys(input).forEach(k => assert(Object.hasOwn(DEFAULTS, k), 'Unknown setting: ' + k));
+    assert(typeof result.displayName === 'string', 'Enter a name using text.');
+    result.displayName = result.displayName.trim().replace(/\s+/g, ' ');
+    assert(result.displayName.length <= 60 && !/[\u0000-\u001f\u007f]/.test(result.displayName), 'Keep your name to 60 characters or fewer.');
     assert(['lb', 'kg'].includes(result.unit), 'Choose pounds or kilograms.');
     assert(['lose', 'maintain'].includes(result.weightMode), 'Choose losing or maintaining.');
     assert([0, 1].includes(result.weekStart), 'Invalid week start.');
