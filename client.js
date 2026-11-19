@@ -633,7 +633,7 @@
     const generation=connectionGeneration;
     snapshotFailed=false;if(snapshotOnly)updateStartupStatus();
     const pending=(async()=>{
-      try{const data=await api('getBootstrap');if(generation!==connectionGeneration)return;state.settings=C.validateSettings(data.settings);state.days=data.days.map(day=>({...C.blankDay(day.date),...day}));state.today=data.today;state.selected=state.selected||state.today;state.spreadsheetUrl=data.spreadsheetUrl;state.loaded=true;snapshotOnly=false;snapshotFailed=false;$('log-out').hidden=!pages;if(!privacyLocked)document.body.classList.remove('connection-locked');render();}
+      try{const data=await api('getBootstrap');if(generation!==connectionGeneration)return;state.settings=C.validateSettings(data.settings);state.days=data.days.map(day=>({...C.blankDay(day.date),...day}));state.today=data.today;state.selected=snapshotOnly?state.today:state.selected||state.today;state.spreadsheetUrl=data.spreadsheetUrl;state.loaded=true;snapshotOnly=false;snapshotFailed=false;$('log-out').hidden=!pages;if(!privacyLocked)document.body.classList.remove('connection-locked');render();}
       catch(error){
         if(generation!==connectionGeneration)return;
         if(snapshotOnly){
